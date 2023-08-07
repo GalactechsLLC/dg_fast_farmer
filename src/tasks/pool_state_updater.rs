@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{Ordering};
 use std::time::{Duration, Instant};
 use blst::min_pk::SecretKey;
 use log::{debug, error, info, warn};
@@ -9,7 +9,9 @@ use dg_xch_clients::protocols::pool::{AuthenticationPayload, get_current_authent
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::clvm::bls_bindings::sign;
 use dg_xch_serialize::{ChiaSerialize, hash_256};
+use tokio::sync::Mutex;
 use crate::models::config::{Config, PoolWalletConfig};
+use crate::models::FarmerSharedState;
 
 const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
 const UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL: u64 = 120;
@@ -17,28 +19,27 @@ const UPDATE_POOL_FARMER_INFO_INTERVAL: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct FarmerPoolState {
-    points_found_since_start: u64,
-    points_found_24h: Vec<(Instant, u64)>,
-    points_acknowledged_since_start: u64,
-    points_acknowledged_24h: Vec<(Instant, u64)>,
-    next_farmer_update: Instant,
-    next_pool_info_update: Instant,
-    current_points: u64,
+    pub(crate) points_found_since_start: u64,
+    pub(crate) points_found_24h: Vec<(Instant, u64)>,
+    pub(crate) points_acknowledged_since_start: u64,
+    pub(crate) points_acknowledged_24h: Vec<(Instant, u64)>,
+    pub(crate) next_farmer_update: Instant,
+    pub(crate) next_pool_info_update: Instant,
+    pub(crate) current_points: u64,
     pub(crate) current_difficulty: Option<u64>,
     pub(crate) pool_config: Option<PoolWalletConfig>,
-    pool_errors_24h: Vec<(Instant, String)>,
-    authentication_token_timeout: Option<u8>,
+    pub(crate) pool_errors_24h: Vec<(Instant, String)>,
+    pub(crate) authentication_token_timeout: Option<u8>,
 }
 
-pub async fn pool_updater(shutdown_trigger: &AtomicBool, config: Arc<Config>) {
+pub async fn pool_updater(shared_state: Arc<FarmerSharedState>) {
     let mut last_update = Instant::now();
     let mut first = true;
     let pool_client = Arc::new(DefaultPoolClient::new());
     let auth_keys = Default::default();
     let owner_keys = Default::default();
-    let mut pool_states = Default::default();
     loop {
-        if !shutdown_trigger.load(Ordering::Relaxed) {
+        if !shared_state.run.load(Ordering::Relaxed) {
             break;
         }
         if first || Instant::now().duration_since(last_update).as_secs() >= 60 {
@@ -47,9 +48,9 @@ pub async fn pool_updater(shutdown_trigger: &AtomicBool, config: Arc<Config>) {
             update_pool_state(
                 &auth_keys,
                 &owner_keys,
-                &mut pool_states,
+                shared_state.pool_states.clone(),
                 pool_client.clone(),
-                config.clone()
+                shared_state.config.clone()
             ).await;
             last_update = Instant::now();
         }
@@ -216,14 +217,18 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
 pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
     auth_keys: &HashMap<Bytes32, SecretKey>,
     owner_keys: &HashMap<Bytes48, SecretKey>,
-    pool_states: &mut HashMap<Bytes32, FarmerPoolState>,
+    pool_states: Arc<Mutex<HashMap<Bytes32, FarmerPoolState>>>,
     pool_client: Arc<T>,
     config: Arc<Config>,
 ) {
     for pool_config in &config.pool_info {
         if let Some(auth_secret_key) = auth_keys.get(&pool_config.p2_singleton_puzzle_hash) {
-            let mut pool_state = match pool_states.get(&pool_config.p2_singleton_puzzle_hash) {
-                Some(s)  => s.clone(),
+            let pool_state;
+            {
+                pool_state = pool_states.lock().await.get(&pool_config.p2_singleton_puzzle_hash).cloned();
+            }
+            let mut pool_state = match pool_state {
+                Some(s)  => s,
                 None => {
                     let s = FarmerPoolState {
                         points_found_since_start: 0,
@@ -238,7 +243,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         pool_errors_24h: vec![],
                         authentication_token_timeout: None,
                     };
-                    pool_states.insert(
+                    pool_states.lock().await.insert(
                         pool_config.p2_singleton_puzzle_hash.clone(),
                         s.clone(),
                     );
@@ -402,7 +407,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     warn!("No pool specific authentication_token_timeout has been set for {}, check communication with the pool.", &pool_config.p2_singleton_puzzle_hash);
                 }
                 //Update map
-                pool_states.insert(pool_config.p2_singleton_puzzle_hash.clone(), pool_state);
+                pool_states.lock().await.insert(pool_config.p2_singleton_puzzle_hash.clone(), pool_state);
             }
         } else {
             warn!(

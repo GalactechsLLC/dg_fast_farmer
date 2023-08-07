@@ -11,11 +11,13 @@ async-trait = "0.1.58"
 blst = "0.3.7"
 dg_xch_clients = {path="./dg_xch_utils_priv/clients"}
 dg_xch_core = {path="./dg_xch_utils_priv/core"}
+dg_xch_keys = {path="./dg_xch_utils_priv/keys"}
 dg_xch_pos = {path="./dg_xch_utils_priv/proof_of_space"}
 dg_xch_macros = {path="./dg_xch_utils_priv/macros"}
 dg_xch_serialize = {path="./dg_xch_utils_priv/serialize"}
 futures-util = "0.3.27"
 hex = "0.4.3"
+hyper-tungstenite = "0.9.0"
 log = "0.4.17"
 reqwest = {version="0.11.16", features =["rustls-tls", "json"]}
 serde = {version="1.0.136", features = ["derive"]}

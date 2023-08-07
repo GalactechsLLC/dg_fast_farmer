@@ -339,11 +339,13 @@ dependencies = [
  "blst",
  "dg_xch_clients",
  "dg_xch_core",
+ "dg_xch_keys",
  "dg_xch_macros",
  "dg_xch_pos",
  "dg_xch_serialize",
  "futures-util",
  "hex",
+ "hyper-tungstenite",
  "log",
  "reqwest",
  "serde",
@@ -352,6 +354,19 @@ dependencies = [
  "simple_logger",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "dg_xch_keys"
+version = "1.0.2"
+dependencies = [
+ "bech32",
+ "bip39",
+ "blst",
+ "dg_xch_core",
+ "dg_xch_puzzles",
+ "hkdf",
+ "sha2",
 ]
 
 [[package]]
@@ -382,6 +397,20 @@ dependencies = [
  "rayon",
  "sha2",
  "simple_logger",
+ "tokio",
+]
+
+[[package]]
+name = "dg_xch_puzzles"
+version = "1.0.2"
+dependencies = [
+ "blst",
+ "dg_xch_core",
+ "dg_xch_serialize",
+ "lazy_static",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
  "tokio",
 ]
 
@@ -759,6 +788,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-tungstenite"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "880b8b1c98a5ec2a505c7c90db6d3f6f1f480af5655d9c5b55facc9382a5a5b5"
+dependencies = [
+ "hyper",
+ "pin-project",
+ "tokio",
+ "tokio-tungstenite",
+ "tungstenite",
+]
+
+[[package]]
 name = "idna"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1110,6 +1152,26 @@ name = "percent-encoding"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b2a4787296e9989611394c33f193f676704af1686e70b8f8033ab5ba9a35a94"
+
+[[package]]
+name = "pin-project"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fda4ed1c6c173e3fc7a83629421152e01d7b1f9b7f65fb301e490e8cfc656422"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4359fd9c9171ec6e8c62926d6faaf553a8dc3f64e1507e76da7911b4f6a04405"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.18",
+]
 
 [[package]]
 name = "pin-project-lite"
