@@ -1,0 +1,26 @@
+[package]
+name = "dg_xch_fast_farmer"
+version = "1.0.1"
+edition = "2021"
+authors = ["James Hoerr"]
+description = "Fast "
+
+
+[dependencies]
+async-trait = "0.1.58"
+blst = "0.3.7"
+dg_xch_clients = {path="./dg_xch_utils_priv/clients"}
+dg_xch_core = {path="./dg_xch_utils_priv/core"}
+dg_xch_pos = {path="./dg_xch_utils_priv/proof_of_space"}
+dg_xch_macros = {path="./dg_xch_utils_priv/macros"}
+dg_xch_serialize = {path="./dg_xch_utils_priv/serialize"}
+futures-util = "0.3.27"
+hex = "0.4.3"
+log = "0.4.17"
+reqwest = {version="0.11.16", features =["rustls-tls", "json"]}
+serde = {version="1.0.136", features = ["derive"]}
+serde_json = "1.0.79"
+serde_yaml = "0.9.14"
+simple_logger = "4.0.0"
+tokio = {version = "1.21.2", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+uuid = {version="1.2.2", features=["v4"]}
