@@ -3,22 +3,25 @@ name = "dg_fast_farmer"
 version = "1.0.1"
 edition = "2021"
 authors = ["James Hoerr"]
-description = "Fast "
+description = "A lite farmer for the Chia Blockchain."
 
+[[bin]]
+name="ff"
+path="src/main.rs"
 
 [dependencies]
-async-trait = "0.1.73"
+async-trait = "0.1.74"
 blst = "0.3.11"
 dialoguer = "0.11.0"
-dg_xch_cli = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/cli", version="1.0.9" }
-dg_xch_clients = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/clients", version="1.0.9" }
-dg_xch_core = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/core", version = "1.0.9", features = ["paperclip"] }
-dg_xch_keys = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/keys", version="1.0.9" }
-dg_xch_macros = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/macros", version="1.0.9" }
-dg_xch_pos = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/proof_of_space", version="1.0.9" }
-dg_xch_puzzles = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/puzzles", version="1.0.9" }
-dg_xch_serialize = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/serialize", version="1.0.9" }
-futures-util = "0.3.28"
+dg_xch_cli = { version="1.1.0" }
+dg_xch_clients = { version="1.1.0" }
+dg_xch_core = { version = "1.1.0", features = ["paperclip"] }
+dg_xch_keys = { version="1.1.0" }
+dg_xch_macros = { version="1.1.0" }
+dg_xch_pos = { version="1.1.0" }
+dg_xch_puzzles = { version="1.1.0" }
+dg_xch_serialize = { version="1.1.0" }
+futures-util = "0.3.29"
 hex = "0.4.3"
 hyper-tungstenite = "0.11.1"
 log = "0.4.20"
@@ -30,5 +33,5 @@ serde_yaml = "0.9.27"
 simple_logger = "4.2.0"
 tokio = {version = "1.33.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
 tokio-tungstenite = {version = "0.20.1", features = ["rustls-tls-webpki-roots", "rustls"] }
-uuid = {version="1.2.2", features=["v4"]}
+uuid = {version="1.5.0", features=["v4"]}
 clap = { version = "4.4.7", features = ["derive"] }
