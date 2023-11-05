@@ -10,7 +10,7 @@ name="ff"
 path="src/main.rs"
 
 [dependencies]
-async-trait = "0.1.73"
+async-trait = "0.1.74"
 blst = "0.3.11"
 dialoguer = "0.11.0"
 dg_xch_cli = { version="1.1.0" }
@@ -21,7 +21,7 @@ dg_xch_macros = { version="1.1.0" }
 dg_xch_pos = { version="1.1.0" }
 dg_xch_puzzles = { version="1.1.0" }
 dg_xch_serialize = { version="1.1.0" }
-futures-util = "0.3.28"
+futures-util = "0.3.29"
 hex = "0.4.3"
 hyper-tungstenite = "0.11.1"
 log = "0.4.20"
@@ -33,5 +33,5 @@ serde_yaml = "0.9.27"
 simple_logger = "4.2.0"
 tokio = {version = "1.33.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
 tokio-tungstenite = {version = "0.20.1", features = ["rustls-tls-webpki-roots", "rustls"] }
-uuid = {version="1.2.2", features=["v4"]}
+uuid = {version="1.5.0", features=["v4"]}
 clap = { version = "4.4.7", features = ["derive"] }
