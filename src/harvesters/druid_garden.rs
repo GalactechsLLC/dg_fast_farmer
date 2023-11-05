@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::available_parallelism;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -48,12 +48,12 @@ struct PlotCounts {
 
 pub struct DruidGardenHarvester {
     pub plots: Arc<Mutex<HashMap<PathInfo, Arc<PlotInfo>>>>,
-    pub plot_dirs: Vec<PathBuf>,
+    pub plot_dirs: Arc<Vec<PathBuf>>,
     pub decompressor_pool: Arc<DecompressorPool>,
     pub plots_ready: Arc<AtomicBool>,
-    pub farmer_public_keys: Vec<Bytes48>,
-    pub pool_public_keys: Vec<Bytes48>,
-    pub pool_contract_hashes: Vec<Bytes32>,
+    pub farmer_public_keys: Arc<Vec<Bytes48>>,
+    pub pool_public_keys: Arc<Vec<Bytes48>>,
+    pub pool_contract_hashes: Arc<Vec<Bytes32>>,
     pub selected_network: String,
     pub uuid: Uuid,
 }
@@ -329,9 +329,10 @@ impl DruidGardenHarvester {
             1,
             available_parallelism().map(|u| u.get()).unwrap_or(4) as u8,
         ));
+        let plot_dirs = Arc::new(plot_dirs);
         let plots = Arc::new(Mutex::new(
             load_plots(
-                &plot_dirs,
+                plot_dirs.clone(),
                 &farmer_public_keys,
                 &pool_public_keys,
                 &pool_contract_hashes,
@@ -340,10 +341,49 @@ impl DruidGardenHarvester {
             )
             .await?,
         ));
+
+        let farmer_public_keys = Arc::new(farmer_public_keys);
+        let pool_public_keys = Arc::new(pool_public_keys);
+        let pool_contract_hashes = Arc::new(pool_contract_hashes);
+        let plot_sync_mutex = plots.clone();
+        let plot_sync_dirs = plot_dirs.clone();
+        let plot_sync_farmer_public_keys = farmer_public_keys.clone();
+        let plot_sync_pool_public_keys = pool_public_keys.clone();
+        let plot_sync_pool_contract_hashes = pool_contract_hashes.clone();
+        let plot_sync_decompressor_pool = decompressor_pool.clone();
         let _plot_sync = tokio::spawn(async move {
+            let mut last_sync = Instant::now();
             loop {
                 if !shutdown_signal.load(Ordering::Relaxed) {
                     break;
+                }
+                if last_sync.elapsed() > Duration::from_secs(30) {
+                    let existing_plot_paths: Arc<Vec<PathBuf>> = Arc::new(
+                        plot_sync_mutex
+                            .lock()
+                            .await
+                            .keys()
+                            .map(|info| info.path.clone())
+                            .collect(),
+                    );
+                    match load_plots(
+                        plot_sync_dirs.clone(),
+                        &plot_sync_farmer_public_keys,
+                        &plot_sync_pool_public_keys,
+                        &plot_sync_pool_contract_hashes,
+                        existing_plot_paths.as_ref().clone(),
+                        plot_sync_decompressor_pool.clone(),
+                    )
+                    .await
+                    {
+                        Ok(plots) => {
+                            plot_sync_mutex.lock().await.extend(plots);
+                            last_sync = Instant::now();
+                        }
+                        Err(e) => {
+                            error!("Failed to load plots: {:?}", e);
+                        }
+                    }
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -363,7 +403,7 @@ impl DruidGardenHarvester {
 }
 
 async fn load_plots(
-    plot_dirs: &[PathBuf],
+    plot_dirs: Arc<Vec<PathBuf>>,
     farmer_public_keys: &[Bytes48],
     pool_public_keys: &[Bytes48],
     pool_contract_hashes: &[Bytes32],
@@ -386,13 +426,14 @@ async fn load_plots(
     let pool_contract_hashes = Arc::new(pool_contract_hashes.to_vec());
     let existing_paths: Arc<Vec<PathBuf>> = Arc::new(existing_plot_paths);
     let futures = FuturesUnordered::new();
-    for dir in plot_dirs.iter().cloned() {
+    for dir in plot_dirs.iter() {
         let farmer_public_keys = farmer_public_keys.clone();
         let pool_public_keys = pool_public_keys.clone();
         let pool_contract_hashes = pool_contract_hashes.clone();
         let existing_paths = existing_paths.clone();
         let decompressor_pool = decompressor_pool.clone();
-        info!("Validating Plot Directory: {:?}", dir);
+        let dir = dir.clone();
+        info!("Validating Plot Directory: {:?}", &dir);
         futures.push(timeout(
             Duration::from_secs(30),
             tokio::spawn(async move {
