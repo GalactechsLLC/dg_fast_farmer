@@ -1,5 +1,5 @@
 [package]
-name = "dg_xch_fast_farmer"
+name = "dg_fast_farmer"
 version = "1.0.1"
 edition = "2021"
 authors = ["James Hoerr"]
@@ -7,22 +7,28 @@ description = "Fast "
 
 
 [dependencies]
-async-trait = "0.1.58"
-blst = "0.3.7"
-dg_xch_clients = {path="./dg_xch_utils_priv/clients"}
-dg_xch_core = {path="./dg_xch_utils_priv/core"}
-dg_xch_keys = {path="./dg_xch_utils_priv/keys"}
-dg_xch_pos = {path="./dg_xch_utils_priv/proof_of_space"}
-dg_xch_macros = {path="./dg_xch_utils_priv/macros"}
-dg_xch_serialize = {path="./dg_xch_utils_priv/serialize"}
-futures-util = "0.3.27"
+async-trait = "0.1.73"
+blst = "0.3.11"
+dialoguer = "0.11.0"
+dg_xch_cli = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/cli", version="1.0.9" }
+dg_xch_clients = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/clients", version="1.0.9" }
+dg_xch_core = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/core", version = "1.0.9", features = ["paperclip"] }
+dg_xch_keys = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/keys", version="1.0.9" }
+dg_xch_macros = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/macros", version="1.0.9" }
+dg_xch_pos = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/proof_of_space", version="1.0.9" }
+dg_xch_puzzles = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/puzzles", version="1.0.9" }
+dg_xch_serialize = { path="../../../evergreen_dev/code/evg-os/dg_xch_utils/serialize", version="1.0.9" }
+futures-util = "0.3.28"
 hex = "0.4.3"
-hyper-tungstenite = "0.9.0"
-log = "0.4.17"
-reqwest = {version="0.11.16", features =["rustls-tls", "json"]}
-serde = {version="1.0.136", features = ["derive"]}
-serde_json = "1.0.79"
-serde_yaml = "0.9.14"
-simple_logger = "4.0.0"
-tokio = {version = "1.21.2", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+hyper-tungstenite = "0.11.1"
+log = "0.4.20"
+once_cell = "1.18.0"
+reqwest = {version="0.11.22", features =["rustls-tls", "json"]}
+serde = {version="1.0.190", features = ["derive"]}
+serde_json = "1.0.108"
+serde_yaml = "0.9.27"
+simple_logger = "4.2.0"
+tokio = {version = "1.33.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+tokio-tungstenite = {version = "0.20.1", features = ["rustls-tls-webpki-roots", "rustls"] }
 uuid = {version="1.2.2", features=["v4"]}
+clap = { version = "4.4.7", features = ["derive"] }

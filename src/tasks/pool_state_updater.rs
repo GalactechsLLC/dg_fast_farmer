@@ -1,17 +1,24 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{Ordering};
-use std::time::{Duration, Instant};
+use crate::farmer::config::{Config, PoolWalletConfig};
+use crate::farmer::FarmerSharedState;
+use crate::HEADERS;
 use blst::min_pk::SecretKey;
-use log::{debug, error, info, warn};
 use dg_xch_clients::api::pool::{DefaultPoolClient, PoolClient};
-use dg_xch_clients::protocols::pool::{AuthenticationPayload, get_current_authentication_token, GetFarmerRequest, GetFarmerResponse, GetPoolInfoResponse, PoolError, PoolErrorCode, PostFarmerPayload, PostFarmerRequest, PostFarmerResponse, PutFarmerPayload, PutFarmerRequest, PutFarmerResponse};
-use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
-use dg_xch_core::clvm::bls_bindings::sign;
-use dg_xch_serialize::{ChiaSerialize, hash_256};
+use dg_xch_clients::protocols::pool::{
+    get_current_authentication_token, AuthenticationPayload, GetFarmerRequest, GetFarmerResponse,
+    PoolError, PoolErrorCode, PostFarmerPayload, PostFarmerRequest, PostFarmerResponse,
+    PutFarmerPayload, PutFarmerRequest, PutFarmerResponse,
+};
+use dg_xch_core::blockchain::sized_bytes::{hex_to_bytes, Bytes32, Bytes48};
+use dg_xch_core::clvm::bls_bindings::{sign, verify_signature};
+use dg_xch_keys::decode_puzzle_hash;
+use dg_xch_serialize::{hash_256, ChiaSerialize};
+use log::{debug, error, info, warn};
+use std::collections::HashMap;
+use std::io::Error;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use crate::models::config::{Config, PoolWalletConfig};
-use crate::models::FarmerSharedState;
 
 const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
 const UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL: u64 = 120;
@@ -19,74 +26,56 @@ const UPDATE_POOL_FARMER_INFO_INTERVAL: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct FarmerPoolState {
-    pub(crate) points_found_since_start: u64,
-    pub(crate) points_found_24h: Vec<(Instant, u64)>,
-    pub(crate) points_acknowledged_since_start: u64,
-    pub(crate) points_acknowledged_24h: Vec<(Instant, u64)>,
     pub(crate) next_farmer_update: Instant,
     pub(crate) next_pool_info_update: Instant,
     pub(crate) current_points: u64,
     pub(crate) current_difficulty: Option<u64>,
     pub(crate) pool_config: Option<PoolWalletConfig>,
-    pub(crate) pool_errors_24h: Vec<(Instant, String)>,
     pub(crate) authentication_token_timeout: Option<u8>,
+}
+impl Default for FarmerPoolState {
+    fn default() -> Self {
+        Self {
+            next_farmer_update: Instant::now(),
+            next_pool_info_update: Instant::now(),
+            current_points: 0,
+            current_difficulty: None,
+            pool_config: None,
+            authentication_token_timeout: None,
+        }
+    }
 }
 
 pub async fn pool_updater(shared_state: Arc<FarmerSharedState>) {
     let mut last_update = Instant::now();
     let mut first = true;
     let pool_client = Arc::new(DefaultPoolClient::new());
-    let auth_keys = Default::default();
-    let owner_keys = Default::default();
     loop {
         if !shared_state.run.load(Ordering::Relaxed) {
             break;
-        }
-        if first || Instant::now().duration_since(last_update).as_secs() >= 60 {
-            first = false;
+        } else if first
+            || shared_state.force_pool_update.load(Ordering::Relaxed)
+            || Instant::now().duration_since(last_update).as_secs() >= 60
+        {
             info!("Updating Pool State");
             update_pool_state(
-                &auth_keys,
-                &owner_keys,
+                shared_state.auth_secret_keys.as_ref(),
+                shared_state.owner_secret_keys.as_ref(),
                 shared_state.pool_states.clone(),
                 pool_client.clone(),
-                shared_state.config.clone()
-            ).await;
+                shared_state.config.clone(),
+            )
+            .await;
+            first = false;
             last_update = Instant::now();
+            shared_state
+                .force_pool_update
+                .store(false, Ordering::Relaxed);
+        } else {
+            tokio::time::sleep(Duration::from_secs(1)).await
         }
-        tokio::time::sleep(Duration::from_secs(1)).await
     }
     info!("Pool Handle Stopped");
-}
-pub async fn get_pool_info(pool_config: &PoolWalletConfig) -> Option<GetPoolInfoResponse> {
-    match reqwest::get(format!("{}/pool_info", pool_config.pool_url)).await {
-        Ok(resp) => match resp.status() {
-            reqwest::StatusCode::OK => match resp.text().await {
-                Ok(body) => match serde_json::from_str(body.as_str()) {
-                    Ok(c) => {
-                        return Some(c);
-                    }
-                    Err(e) => {
-                        warn!("Failed to load Pool Info, Invalid Json: {:?}, {}", e, body);
-                    }
-                },
-                Err(e) => {
-                    warn!("Failed to load Pool Info, Invalid Body: {:?}", e);
-                }
-            },
-            _ => {
-                warn!(
-                    "Failed to load Pool Info, Bad Status Code: {:?}, {}",
-                    resp.status(),
-                    resp.text().await.unwrap_or_default()
-                );
-            }
-        },
-        Err(e) => {
-            warn!("Failed to load Pool Info: {:?}", e);
-        }
-    }
-    None
 }
 
 pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
@@ -96,67 +85,88 @@ pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
     client: Arc<T>,
 ) -> Result<GetFarmerResponse, PoolError> {
     let authentication_token = get_current_authentication_token(authentication_token_timeout);
-    let signature = sign(
-        authentication_sk,
-        hash_256(
-            AuthenticationPayload {
-                method_name: "get_farmer".to_string(),
-                launcher_id: pool_config.launcher_id.clone(),
-                target_puzzle_hash: pool_config.target_puzzle_hash.clone(),
-                authentication_token,
-            }
-                .to_bytes(),
-        )
-            .as_slice(),
-    );
+    let msg = AuthenticationPayload {
+        method_name: "get_farmer".to_string(),
+        launcher_id: pool_config.launcher_id,
+        target_puzzle_hash: pool_config.target_puzzle_hash,
+        authentication_token,
+    }
+    .to_bytes();
+    let to_sign = hash_256(&msg);
+    let signature = sign(authentication_sk, &to_sign);
+    if !verify_signature(&authentication_sk.sk_to_pk(), &to_sign, &signature) {
+        error!("Farmer GET Failed to Validate Signature");
+        return Err(PoolError {
+            error_code: PoolErrorCode::InvalidSignature as u8,
+            error_message: "Local Failed to Validate Signature".to_string(),
+        });
+    }
     client
         .get_farmer(
             &pool_config.pool_url,
             GetFarmerRequest {
-                launcher_id: pool_config.launcher_id.clone(),
+                launcher_id: pool_config.launcher_id,
                 authentication_token,
                 signature: signature.to_bytes().into(),
             },
+            &Some(HEADERS.clone()),
         )
         .await
 }
 
 async fn do_auth(
-    auth_keys: &HashMap<Bytes32, SecretKey>,
     pool_config: &PoolWalletConfig,
     owner_sk: &SecretKey,
+    auth_keys: &HashMap<Bytes48, SecretKey>,
 ) -> Result<Bytes48, PoolError> {
     if owner_sk.sk_to_pk().to_bytes() != *pool_config.owner_public_key.to_sized_bytes() {
-        return Err(PoolError {
-            error_code: PoolErrorCode::ServerException as u8,
-            error_message: "Owner Keys Mismatch".to_string(),
-        });
-    }
-    if let Some(s) = auth_keys.get(&pool_config.p2_singleton_puzzle_hash) {
-        Ok(s.sk_to_pk().to_bytes().into())
-    } else {
         Err(PoolError {
             error_code: PoolErrorCode::ServerException as u8,
-            error_message: "Authentication Public Key Not Found".to_string(),
+            error_message: "Owner Keys Mismatch".to_string(),
+        })
+    } else if let Some(auth_key) = auth_keys.get(&owner_sk.sk_to_pk().to_bytes().into()) {
+        Ok(auth_key.sk_to_pk().to_bytes().into())
+    } else {
+        Err(PoolError {
+            error_code: PoolErrorCode::NotFound as u8,
+            error_message: "Auth Key Not Found".to_string(),
         })
     }
 }
 
 pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
-    auth_keys: &HashMap<Bytes32, SecretKey>,
     pool_config: &PoolWalletConfig,
+    payout_instructions: &str,
     authentication_token_timeout: u8,
     owner_sk: &SecretKey,
+    auth_keys: &HashMap<Bytes48, SecretKey>,
+    suggested_difficulty: Option<u64>,
     client: Arc<T>,
 ) -> Result<PostFarmerResponse, PoolError> {
     let payload = PostFarmerPayload {
-        launcher_id: pool_config.launcher_id.clone(),
+        launcher_id: pool_config.launcher_id,
         authentication_token: get_current_authentication_token(authentication_token_timeout),
-        authentication_public_key: do_auth(auth_keys, pool_config, owner_sk).await?,
-        payout_instructions: pool_config.payout_instructions.clone(),
-        suggested_difficulty: None,
+        authentication_public_key: do_auth(pool_config, owner_sk, auth_keys).await?,
+        payout_instructions: parse_payout_address(payout_instructions.to_string()).map_err(
+            |e| PoolError {
+                error_code: PoolErrorCode::InvalidPayoutInstructions as u8,
+                error_message: format!(
+                    "Failed to Parse Payout Instructions: {}, {:?}",
+                    payout_instructions, e
+                ),
+            },
+        )?,
+        suggested_difficulty,
     };
-    let signature = sign(owner_sk, &hash_256(payload.to_bytes()));
+    let to_sign = hash_256(payload.to_bytes());
+    let signature = sign(owner_sk, &to_sign);
+    if !verify_signature(&owner_sk.sk_to_pk(), &to_sign, &signature) {
+        error!("Farmer POST Failed to Validate Signature");
+        return Err(PoolError {
+            error_code: PoolErrorCode::InvalidSignature as u8,
+            error_message: "Local Failed to Validate Signature".to_string(),
+        });
+    }
     client
         .post_farmer(
             &pool_config.pool_url,
@@ -164,31 +174,44 @@ pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
                 payload,
                 signature: signature.to_bytes().into(),
             },
+            &Some(HEADERS.clone()),
         )
         .await
 }
 
 pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
-    auth_keys: &HashMap<Bytes32, SecretKey>,
     pool_config: &PoolWalletConfig,
+    payout_instructions: &str,
     authentication_token_timeout: u8,
     owner_sk: &SecretKey,
+    auth_keys: &HashMap<Bytes48, SecretKey>,
+    suggested_difficulty: Option<u64>,
     client: Arc<T>,
 ) -> Result<PutFarmerResponse, PoolError> {
-    let authentication_public_key = do_auth(auth_keys, pool_config, owner_sk).await?;
+    let authentication_public_key = do_auth(pool_config, owner_sk, auth_keys).await?;
     let payload = PutFarmerPayload {
-        launcher_id: pool_config.launcher_id.clone(),
+        launcher_id: pool_config.launcher_id,
         authentication_token: get_current_authentication_token(authentication_token_timeout),
         authentication_public_key: Some(authentication_public_key),
-        payout_instructions: Some(pool_config.payout_instructions.clone()),
-        suggested_difficulty: None,
+        payout_instructions: parse_payout_address(payout_instructions.to_string()).ok(),
+        suggested_difficulty,
     };
-    let signature = sign(owner_sk, &hash_256(payload.to_bytes()));
+    let to_sign = hash_256(payload.to_bytes());
+    let signature = sign(owner_sk, &to_sign);
+    if !verify_signature(&owner_sk.sk_to_pk(), &to_sign, &signature) {
+        error!("Local Failed to Validate Signature");
+        return Err(PoolError {
+            error_code: PoolErrorCode::InvalidSignature as u8,
+            error_message: "Local Failed to Validate Signature".to_string(),
+        });
+    }
     let request = PutFarmerRequest {
         payload,
         signature: signature.to_bytes().into(),
     };
-    client.put_farmer(&pool_config.pool_url, request).await
+    client
+        .put_farmer(&pool_config.pool_url, request, &Some(HEADERS.clone()))
+        .await
 }
 
 pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
@@ -203,7 +226,8 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
         authentication_token_timeout,
         authentication_sk,
         client,
-    ).await?;
+    )
+    .await?;
     pool_state.current_difficulty = Some(response.current_difficulty);
     pool_state.current_points = response.current_points;
     info!(
@@ -215,42 +239,43 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
 }
 
 pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
-    auth_keys: &HashMap<Bytes32, SecretKey>,
+    auth_keys: &HashMap<Bytes48, SecretKey>,
     owner_keys: &HashMap<Bytes48, SecretKey>,
     pool_states: Arc<Mutex<HashMap<Bytes32, FarmerPoolState>>>,
-    pool_client: Arc<T>,
+    client: Arc<T>,
     config: Arc<Config>,
 ) {
     for pool_config in &config.pool_info {
-        if let Some(auth_secret_key) = auth_keys.get(&pool_config.p2_singleton_puzzle_hash) {
-            let pool_state;
-            {
-                pool_state = pool_states.lock().await.get(&pool_config.p2_singleton_puzzle_hash).cloned();
-            }
-            let mut pool_state = match pool_state {
-                Some(s)  => s,
-                None => {
-                    let s = FarmerPoolState {
-                        points_found_since_start: 0,
-                        points_found_24h: vec![],
-                        points_acknowledged_since_start: 0,
-                        points_acknowledged_24h: vec![],
+        if let (Some(owner_secret_key), Some(auth_secret_key)) = (
+            owner_keys.get(&pool_config.owner_public_key),
+            auth_keys.get(&pool_config.owner_public_key),
+        ) {
+            let state_exists = pool_states
+                .lock()
+                .await
+                .get(&pool_config.p2_singleton_puzzle_hash)
+                .is_some();
+            if !state_exists {
+                pool_states.lock().await.insert(
+                    pool_config.p2_singleton_puzzle_hash,
+                    FarmerPoolState {
                         next_farmer_update: Instant::now(),
                         next_pool_info_update: Instant::now(),
                         current_points: 0,
                         current_difficulty: None,
-                        pool_config: Some(pool_config.clone()),
-                        pool_errors_24h: vec![],
+                        pool_config: None,
                         authentication_token_timeout: None,
-                    };
-                    pool_states.lock().await.insert(
-                        pool_config.p2_singleton_puzzle_hash.clone(),
-                        s.clone(),
-                    );
-                    info!("Added pool: {:?}", pool_config);
-                    s
-                }
-            };
+                    },
+                );
+                info!("Added pool: {:?}", pool_config);
+            }
+            let mut pool_state = pool_states
+                .lock()
+                .await
+                .get_mut(&pool_config.p2_singleton_puzzle_hash)
+                .cloned()
+                .unwrap_or_default();
+            pool_state.pool_config = Some(pool_config.clone());
             if pool_config.pool_url.is_empty() {
                 continue;
             }
@@ -265,18 +290,20 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                 pool_state.next_pool_info_update =
                     Instant::now() + Duration::from_secs(UPDATE_POOL_INFO_INTERVAL);
                 //Makes a GET request to the pool to get the updated information
-                let pool_info = get_pool_info(pool_config).await;
-                if let Some(pool_info) = pool_info {
-                    pool_state.authentication_token_timeout =
-                        Some(pool_info.authentication_token_timeout);
-                    // Only update the first time from GET /pool_info, gets updated from GET /farmer later
-                    if pool_state.current_difficulty.is_none() {
-                        pool_state.current_difficulty = Some(pool_info.minimum_difficulty);
+                match client.get_pool_info(&pool_config.pool_url).await {
+                    Ok(pool_info) => {
+                        pool_state.authentication_token_timeout =
+                            Some(pool_info.authentication_token_timeout);
+                        // Only update the first time from GET /pool_info, gets updated from GET /farmer later
+                        if pool_state.current_difficulty.is_none() {
+                            pool_state.current_difficulty = Some(pool_info.minimum_difficulty);
+                        }
                     }
-                } else {
-                    pool_state.next_pool_info_update = Instant::now()
-                        + Duration::from_secs(UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL);
-                    error!("Update Pool Info Error");
+                    Err(e) => {
+                        pool_state.next_pool_info_update = Instant::now()
+                            + Duration::from_secs(UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL);
+                        error!("Update Pool Info Error: {:?}", e);
+                    }
                 }
             } else {
                 debug!("Not Ready for Update");
@@ -286,105 +313,128 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     Instant::now() + Duration::from_secs(UPDATE_POOL_FARMER_INFO_INTERVAL);
                 if let Some(authentication_token_timeout) = pool_state.authentication_token_timeout
                 {
+                    info!("Running Farmer Pool Update");
                     let farmer_info = match update_pool_farmer_info(
-                            &mut pool_state,
-                            pool_config,
-                            authentication_token_timeout,
-                            &auth_secret_key,
-                            pool_client.clone(),
-                        )
-                        .await
+                        &mut pool_state,
+                        pool_config,
+                        authentication_token_timeout,
+                        auth_secret_key,
+                        client.clone(),
+                    )
+                    .await
                     {
                         Ok(resp) => Some(resp),
                         Err(e) => {
                             if e.error_code == PoolErrorCode::FarmerNotKnown as u8 {
-                                match &owner_keys.get(&pool_config.owner_public_key.to_sized_bytes().into()) {
-                                    None => {
-                                        error!(
-                                            "Could not find Owner SK for {}",
-                                            &pool_config.owner_public_key
+                                warn!("Farmer Pool Not Known");
+                                match post_farmer(
+                                    pool_config,
+                                    &config.payout_address,
+                                    authentication_token_timeout,
+                                    owner_secret_key,
+                                    auth_keys,
+                                    pool_config.difficulty,
+                                    client.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(resp) => {
+                                        info!(
+                                            "Welcome message from {} : {}",
+                                            pool_config.pool_url, resp.welcome_message
                                         );
-                                        continue;
                                     }
-                                    Some(sk) => {
-                                        match post_farmer(
-                                                auth_keys,
-                                                pool_config,
-                                                authentication_token_timeout,
-                                                sk,
-                                                pool_client.clone(),
-                                            )
-                                            .await
-                                        {
-                                            Ok(resp) => {
-                                                info!(
-                                                    "Welcome message from {} : {}",
-                                                    pool_config.pool_url, resp.welcome_message
-                                                );
-                                            }
-                                            Err(e) => {
-                                                error!("Failed POST farmer info. {:?}", e);
-                                            }
-                                        }
-                                        match update_pool_farmer_info(
-                                                &mut pool_state,
-                                                pool_config,
-                                                authentication_token_timeout,
-                                                &auth_secret_key,
-                                                pool_client.clone(),
-                                            )
-                                            .await
-                                        {
-                                            Ok(resp) => Some(resp),
-                                            Err(e) => {
-                                                error!("Failed to update farmer info after POST /farmer. {:?}", e);
-                                                None
-                                            }
-                                        }
+                                    Err(e) => {
+                                        error!("Failed post farmer info. {:?}", e);
                                     }
                                 }
-                            } else if e.error_code == PoolErrorCode::InvalidSignature as u8 {
-                                match &owner_keys.get(&pool_config.owner_public_key.to_sized_bytes().into()) {
-                                    None => {
-                                        error!(
-                                            "Could not find Owner SK for {}",
-                                            &pool_config.owner_public_key
-                                        );
-                                        continue;
-                                    }
-                                    Some(sk) => {
-                                        let _ = put_farmer(
-                                                auth_keys,
-                                                pool_config,
-                                                authentication_token_timeout,
-                                                sk,
-                                                pool_client.clone(),
-                                            )
-                                            .await; //Todo maybe add logging here
-                                    }
-                                }
-                                update_pool_farmer_info(
+                                match update_pool_farmer_info(
                                     &mut pool_state,
                                     pool_config,
                                     authentication_token_timeout,
-                                    &auth_secret_key,
-                                    pool_client.clone(),
+                                    auth_secret_key,
+                                    client.clone(),
                                 )
                                 .await
-                                .ok()
+                                {
+                                    Ok(resp) => Some(resp),
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to update farmer info after POST /farmer. {:?}",
+                                            e
+                                        );
+                                        None
+                                    }
+                                }
+                            } else if e.error_code == PoolErrorCode::InvalidSignature as u8 {
+                                warn!("Invalid Signature Detected, Updating Farmer Auth Key");
+                                match put_farmer(
+                                    pool_config,
+                                    &config.payout_address,
+                                    authentication_token_timeout,
+                                    owner_secret_key,
+                                    auth_keys,
+                                    pool_config.difficulty,
+                                    client.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(res) => {
+                                        info!("Farmer Update Response: {:?}", res);
+                                        update_pool_farmer_info(
+                                            &mut pool_state,
+                                            pool_config,
+                                            authentication_token_timeout,
+                                            auth_secret_key,
+                                            client.clone(),
+                                        )
+                                        .await
+                                        .ok()
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to update farmer auth key. {:?}", e);
+                                        None
+                                    }
+                                }
                             } else {
                                 None
                             }
                         }
                     };
+                    let old_instructions;
                     let payout_instructions_update_required = if let Some(info) = farmer_info {
-                        pool_config.payout_instructions.to_ascii_lowercase()
-                            != info.payout_instructions.to_ascii_lowercase()
+                        if let (Ok(p1), Ok(p2)) = (
+                            parse_payout_address(config.payout_address.to_ascii_lowercase()),
+                            parse_payout_address(info.payout_instructions.to_ascii_lowercase()),
+                        ) {
+                            old_instructions = p2;
+                            p1 != old_instructions
+                        } else {
+                            old_instructions = String::new();
+                            false
+                        }
                     } else {
+                        old_instructions = String::new();
                         false
                     };
-                    if payout_instructions_update_required {
-                        match &owner_keys.get(&pool_config.owner_public_key.to_sized_bytes().into()) {
+                    let difficulty_update_required = pool_config.difficulty.unwrap_or_default() > 0
+                        && pool_state.current_difficulty < pool_config.difficulty;
+                    if payout_instructions_update_required || difficulty_update_required {
+                        if payout_instructions_update_required {
+                            info!(
+                                "Updating Payout Address from {} to {}",
+                                config.payout_address.to_ascii_lowercase(),
+                                old_instructions
+                            );
+                        }
+                        if difficulty_update_required {
+                            info!(
+                                "Updating Difficulty from {} to {}",
+                                pool_state.current_difficulty.unwrap_or_default(),
+                                pool_config.difficulty.unwrap_or_default()
+                            );
+                        }
+                        match owner_keys.get(&pool_config.owner_public_key) {
                             None => {
                                 error!(
                                     "Could not find Owner SK for {}",
@@ -393,13 +443,27 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                 continue;
                             }
                             Some(sk) => {
-                                let _ = put_farmer(
-                                    auth_keys,
+                                match put_farmer(
                                     pool_config,
+                                    &config.payout_address,
                                     authentication_token_timeout,
                                     sk,
-                                    pool_client.clone(),
-                                ).await; //Todo maybe add logging here
+                                    auth_keys,
+                                    pool_config.difficulty,
+                                    client.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(res) => {
+                                        if res.suggested_difficulty.is_some() {
+                                            pool_state.current_difficulty = pool_config.difficulty
+                                        }
+                                        info!("Farmer Update Response: {:?}", res);
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to update farmer auth key. {:?}", e);
+                                    }
+                                }
                             }
                         }
                     }
@@ -407,13 +471,29 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     warn!("No pool specific authentication_token_timeout has been set for {}, check communication with the pool.", &pool_config.p2_singleton_puzzle_hash);
                 }
                 //Update map
-                pool_states.lock().await.insert(pool_config.p2_singleton_puzzle_hash.clone(), pool_state);
+                pool_states
+                    .lock()
+                    .await
+                    .insert(pool_config.p2_singleton_puzzle_hash, pool_state);
             }
         } else {
             warn!(
-                "Could not find authentication sk for: {:?}",
-                &pool_config.p2_singleton_puzzle_hash
+                "Could not find owner sk for: {:?}",
+                &pool_config.owner_public_key
             );
         }
     }
+}
+
+fn parse_payout_address(s: String) -> Result<String, Error> {
+    Ok(if s.starts_with("xch") || s.starts_with("txch") {
+        hex::encode(decode_puzzle_hash(&s)?)
+    } else if s.len() == 64 {
+        match hex_to_bytes(&s) {
+            Ok(h) => hex::encode(h),
+            Err(_) => s,
+        }
+    } else {
+        s
+    })
 }
