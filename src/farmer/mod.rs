@@ -1,8 +1,6 @@
 use crate::farmer::config::Config;
 use crate::farmer::protocols::fullnode::new_signage_point::NewSignagePointHandle;
 use crate::farmer::protocols::fullnode::request_signed_values::RequestSignedValuesHandle;
-use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
-use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
 use crate::harvesters::{load_harvesters, Harvesters};
 use crate::tasks::pool_state_updater::FarmerPoolState;
 use blst::min_pk::SecretKey;
@@ -15,6 +13,7 @@ use dg_xch_clients::websocket::{
 };
 use dg_xch_core::blockchain::proof_of_space::ProofOfSpace;
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
+use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, MAINNET};
 use dg_xch_pos::plots::disk_plot::DiskPlot;
 use dg_xch_pos::plots::plot_reader::PlotReader;
 use log::{error, info};
@@ -104,8 +103,7 @@ pub struct FarmerIdentifier {
 pub struct Farmer<T: PoolClient + Sized + Sync + Send + 'static> {
     shared_state: Arc<FarmerSharedState>,
     harvesters: Arc<HashMap<Uuid, Arc<Harvesters>>>,
-    pos_handle: Arc<NewProofOfSpaceHandle<T>>,
-    sig_handle: Arc<RespondSignaturesHandler<T>>,
+    pool_client: Arc<T>,
 }
 impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
     pub async fn new(
@@ -114,24 +112,10 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
     ) -> Result<Self, Error> {
         let harvesters =
             load_harvesters(shared_state.config.clone(), shared_state.run.clone()).await?;
-        let sig_handle = Arc::new(RespondSignaturesHandler {
-            pool_client: pool_client.clone(),
-            shared_state: shared_state.clone(),
-            harvester_id: Default::default(),
-            harvesters: Arc::new(Default::default()),
-        });
-        let pos_handle = Arc::new(NewProofOfSpaceHandle {
-            pool_client: pool_client.clone(),
-            shared_state: shared_state.clone(),
-            harvester_id: Default::default(),
-            harvesters: Arc::new(Default::default()),
-            sig_responder: sig_handle.clone(),
-        });
         Ok(Self {
             shared_state,
             harvesters,
-            pos_handle,
-            sig_handle,
+            pool_client,
         })
     }
 
@@ -166,6 +150,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     }
                 }
             }
+            let mut last_clear = Instant::now();
             loop {
                 if let Some(client) = s.shared_state.full_node_client.lock().await.as_ref() {
                     if client.is_closed() {
@@ -178,7 +163,43 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                         }
                     }
                 }
-
+                if last_clear.elapsed() > Duration::from_secs(300) {
+                    let expired: Vec<Bytes32> = s
+                        .shared_state
+                        .cache_time
+                        .lock()
+                        .await
+                        .iter()
+                        .filter_map(|(k, v)| {
+                            if v.elapsed() > Duration::from_secs(3600) {
+                                Some(*k)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    s.shared_state
+                        .cache_time
+                        .lock()
+                        .await
+                        .retain(|k, _| !expired.contains(k));
+                    s.shared_state
+                        .signage_points
+                        .lock()
+                        .await
+                        .retain(|k, _| !expired.contains(k));
+                    s.shared_state
+                        .quality_to_identifiers
+                        .lock()
+                        .await
+                        .retain(|k, _| !expired.contains(k));
+                    s.shared_state
+                        .proofs_of_space
+                        .lock()
+                        .await
+                        .retain(|k, _| !expired.contains(k));
+                    last_clear = Instant::now();
+                }
                 if !s.shared_state.run.load(Ordering::Relaxed) {
                     info!("Farmer Stopping");
                     break 'retry;
@@ -237,10 +258,13 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                         id: signage_handle_id,
                         shared_state: self.shared_state.clone(),
                         pool_state: self.shared_state.pool_states.clone(),
+                        pool_client: self.pool_client.clone(),
                         signage_points: self.shared_state.signage_points.clone(),
                         cache_time: self.shared_state.cache_time.clone(),
                         harvesters: self.harvesters.clone(),
-                        proof_handler: self.pos_handle.clone(),
+                        constants: CONSENSUS_CONSTANTS_MAP
+                            .get(&self.shared_state.config.selected_network)
+                            .unwrap_or(&MAINNET),
                     }),
                 ),
             )
@@ -260,8 +284,11 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     Arc::new(RequestSignedValuesHandle {
                         id: request_signed_values_id,
                         shared_state: self.shared_state.clone(),
+                        pool_client: self.pool_client.clone(),
                         harvesters: self.harvesters.clone(),
-                        sig_handle: self.sig_handle.clone(),
+                        constants: CONSENSUS_CONSTANTS_MAP
+                            .get(&self.shared_state.config.selected_network)
+                            .unwrap_or(&MAINNET),
                     }),
                 ),
             )

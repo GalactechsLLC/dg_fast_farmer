@@ -32,6 +32,11 @@ pub fn version() -> String {
     format!("{}: {}", _pkg_name(), _version())
 }
 
+#[test]
+fn version_test() {
+    println!("{}", version());
+}
+
 pub static HEADERS: Lazy<HashMap<String, String>> = Lazy::new(|| {
     let mut headers = HashMap::new();
     headers.insert(String::from("X-fast-farmer-version"), version());

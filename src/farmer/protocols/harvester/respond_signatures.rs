@@ -13,7 +13,7 @@ use dg_xch_core::blockchain::proof_of_space::{
     generate_plot_public_key, generate_taproot_sk, ProofBytes,
 };
 use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
-use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, MAINNET};
+use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_pos::verifier::proof_to_bytes;
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
@@ -28,7 +28,8 @@ pub struct RespondSignaturesHandler<T: PoolClient + Sized + Sync + Send + 'stati
     pub pool_client: Arc<T>,
     pub shared_state: Arc<FarmerSharedState>,
     pub harvester_id: Uuid,
-    pub harvesters: Arc<HashMap<Uuid, Harvesters>>,
+    pub harvesters: Arc<HashMap<Uuid, Arc<Harvesters>>>,
+    pub constants: &'static ConsensusConstants,
 }
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
@@ -80,13 +81,10 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                 }
                 if let Some(mut pospace) = pospace {
                     let include_taproot = pospace.pool_contract_puzzle_hash.is_some();
-                    let constants = CONSENSUS_CONSTANTS_MAP
-                        .get(&self.shared_state.config.selected_network)
-                        .unwrap_or(&MAINNET);
                     if let Some((computed_quality_string, reordered_proof)) =
                         verify_and_get_quality_string(
                             &pospace,
-                            constants,
+                            self.constants,
                             &response.challenge_hash,
                             &response.sp_hash,
                         )

@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use dg_xch_cli::wallets::plotnft_utils::scrounge_for_plotnfts;
 use dg_xch_clients::rpc::full_node::FullnodeClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes48;
-use dg_xch_core::consensus::constants::{ConsensusConstants, CONSENSUS_CONSTANTS_MAP, MAINNET};
+use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
 use dg_xch_keys::{
     key_from_mnemonic, master_sk_to_farmer_sk, master_sk_to_pool_sk,
     master_sk_to_pooling_authentication_sk, master_sk_to_singleton_owner_sk,
@@ -70,37 +70,24 @@ pub async fn generate_config_from_mnemonic(
         }
     }
     let mut config = Config::default();
-    let (network, _): (String, &ConsensusConstants) = network
+    let network = network
         .map(|v| {
-            if let Some(c) = CONSENSUS_CONSTANTS_MAP.get(&v) {
-                (v, c)
+            if CONSENSUS_CONSTANTS_MAP.contains_key(&v) {
+                v
             } else {
-                ("mainnet".to_string(), &*MAINNET)
+                "mainnet".to_string()
             }
         })
-        .unwrap_or(("mainnet".to_string(), &*MAINNET));
+        .unwrap_or("mainnet".to_string());
     config.selected_network = network;
     let master_key = key_from_mnemonic(mnemonic)?;
-    match &fullnode_ssl {
-        None => {
-            config.fullnode_host = fullnode_host.to_string();
-            config.fullnode_port = if fullnode_port == 8555 {
-                8444
-            } else {
-                fullnode_port
-            };
-            config.ssl_root_path = None;
-        }
-        Some(root_path) => {
-            config.fullnode_host = fullnode_host.to_string();
-            config.fullnode_port = if fullnode_port == 8555 {
-                8444
-            } else {
-                fullnode_port
-            };
-            config.ssl_root_path = Some(root_path.clone());
-        }
-    }
+    config.fullnode_host = fullnode_host.to_string();
+    config.fullnode_port = if fullnode_port == 8555 {
+        8444
+    } else {
+        fullnode_port
+    };
+    config.ssl_root_path = fullnode_ssl.clone();
     let client = FullnodeClient::new(
         fullnode_host,
         fullnode_port,
@@ -119,17 +106,15 @@ pub async fn generate_config_from_mnemonic(
                 )
             })?;
             let pub_key: Bytes48 = wallet_sk.sk_to_pk().to_bytes().into();
-            let ph = puzzle_hash_for_pk(&pub_key)?;
-            puzzle_hashes.push(ph);
-            let wallet_sk = master_sk_to_wallet_sk(&master_key, index).map_err(|e| {
+            puzzle_hashes.push(puzzle_hash_for_pk(&pub_key)?);
+            let hardened_wallet_sk = master_sk_to_wallet_sk(&master_key, index).map_err(|e| {
                 Error::new(
                     ErrorKind::InvalidInput,
                     format!("Failed to parse Wallet SK: {:?}", e),
                 )
             })?;
-            let pub_key: Bytes48 = wallet_sk.sk_to_pk().to_bytes().into();
-            let ph = puzzle_hash_for_pk(&pub_key)?;
-            puzzle_hashes.push(ph);
+            let pub_key: Bytes48 = hardened_wallet_sk.sk_to_pk().to_bytes().into();
+            puzzle_hashes.push(puzzle_hash_for_pk(&pub_key)?);
         }
         plotnfs.extend(scrounge_for_plotnfts(&client, &puzzle_hashes).await?);
         page += 1;

@@ -6,6 +6,7 @@ use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_clients::protocols::farmer::RequestSignedValues;
 use dg_xch_clients::protocols::harvester::RequestSignatures;
 use dg_xch_clients::websocket::{ChiaMessage, MessageHandler};
+use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_serialize::ChiaSerialize;
 use log::error;
 use std::collections::HashMap;
@@ -16,8 +17,9 @@ use uuid::Uuid;
 pub struct RequestSignedValuesHandle<T: PoolClient + Sized + Sync + Send + 'static> {
     pub id: Uuid,
     pub shared_state: Arc<FarmerSharedState>,
+    pub pool_client: Arc<T>,
     pub harvesters: Arc<HashMap<Uuid, Arc<Harvesters>>>,
-    pub sig_handle: Arc<RespondSignaturesHandler<T>>,
+    pub constants: &'static ConsensusConstants,
 }
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
@@ -42,20 +44,24 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
                     request.foliage_transaction_block_hash,
                 ],
             };
+            let sig_handle = RespondSignaturesHandler {
+                pool_client: self.pool_client.clone(),
+                shared_state: self.shared_state.clone(),
+                harvester_id: identifier.harvester_id,
+                harvesters: self.harvesters.clone(),
+                constants: self.constants,
+            };
             if let Some(h) = self.harvesters.get(&identifier.harvester_id) {
                 let harvester = h.clone();
-                let sig_handle = self.sig_handle.clone();
                 tokio::spawn(async move {
                     match harvester.as_ref() {
                         Harvesters::DruidGarden(harvester) => {
-                            harvester
-                                .request_signatures(request, sig_handle.clone())
-                                .await
+                            harvester.request_signatures(request, sig_handle).await?;
                         }
                     }
+                    Ok::<(), Error>(())
                 });
             }
-            tokio::spawn(async move { todo!() });
             Ok(())
         } else {
             error!("Do not have quality {}", &request.quality_string);

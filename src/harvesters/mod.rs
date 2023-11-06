@@ -30,14 +30,14 @@ pub trait Harvester {
     async fn new_signage_point<T>(
         &self,
         signage_point: Arc<NewSignagePointHarvester>,
-        proof_handle: Arc<T>,
+        proof_handle: T,
     ) -> Result<(), Error>
     where
         T: ProofHandler + Sync + Send;
     async fn request_signatures<T>(
         &self,
         request_signatures: RequestSignatures,
-        response_handle: Arc<T>,
+        response_handle: T,
     ) -> Result<(), Error>
     where
         T: SignatureHandler + Sync + Send;

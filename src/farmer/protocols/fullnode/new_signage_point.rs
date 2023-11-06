@@ -8,6 +8,7 @@ use dg_xch_clients::protocols::farmer::NewSignagePoint;
 use dg_xch_clients::protocols::harvester::{NewSignagePointHarvester, PoolDifficulty};
 use dg_xch_clients::websocket::{ChiaMessage, MessageHandler};
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
+use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_core::consensus::pot_iterations::POOL_SUB_SLOT_ITERS;
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, info, warn};
@@ -22,11 +23,12 @@ use uuid::Uuid;
 pub struct NewSignagePointHandle<T: PoolClient + Sized + Sync + Send + 'static> {
     pub id: Uuid,
     pub pool_state: Arc<Mutex<HashMap<Bytes32, FarmerPoolState>>>,
+    pub pool_client: Arc<T>,
     pub signage_points: Arc<Mutex<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
     pub cache_time: Arc<Mutex<HashMap<Bytes32, Instant>>>,
     pub shared_state: Arc<FarmerSharedState>,
     pub harvesters: Arc<HashMap<Uuid, Arc<Harvesters>>>,
-    pub proof_handler: Arc<NewProofOfSpaceHandle<T>>,
+    pub constants: &'static ConsensusConstants,
 }
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignagePointHandle<T> {
@@ -39,8 +41,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
                 if config.pool_url.is_empty() {
                     //Self Pooling
                     continue;
-                }
-                if let Some(difficulty) = pool_dict.current_difficulty {
+                } else if let Some(difficulty) = pool_dict.current_difficulty {
                     debug!("Setting Difficulty for pool: {}", difficulty);
                     pool_difficulties.push(PoolDifficulty {
                         difficulty,
@@ -65,20 +66,6 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             sp_hash: sp.challenge_chain_sp,
             pool_difficulties,
         });
-        for (_, harvester) in self.harvesters.iter() {
-            let harvester = harvester.clone();
-            let harvester_point = harvester_point.clone();
-            let proof_handler = self.proof_handler.clone();
-            tokio::spawn(async move {
-                match harvester.as_ref() {
-                    Harvesters::DruidGarden(harvester) => {
-                        harvester
-                            .new_signage_point(harvester_point, proof_handler.clone())
-                            .await
-                    }
-                }
-            });
-        }
         self.cache_time
             .lock()
             .await
@@ -95,6 +82,31 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             Entry::Vacant(e) => {
                 e.insert(vec![sp]);
             }
+        }
+        for (_, harvester) in self.harvesters.iter() {
+            let harvester_point = harvester_point.clone();
+            let harvesters = self.harvesters.clone();
+            let pool_client = self.pool_client.clone();
+            let shared_state = self.shared_state.clone();
+            let constants = self.constants;
+            let harvester = harvester.clone();
+            tokio::spawn(async move {
+                match harvester.as_ref() {
+                    Harvesters::DruidGarden(harvester) => {
+                        let proof_handle = NewProofOfSpaceHandle {
+                            pool_client,
+                            shared_state,
+                            harvester_id: harvester.uuid(),
+                            harvesters,
+                            constants,
+                        };
+                        harvester
+                            .new_signage_point(harvester_point, proof_handle)
+                            .await?;
+                    }
+                }
+                Ok::<(), Error>(())
+            });
         }
         Ok(())
     }
