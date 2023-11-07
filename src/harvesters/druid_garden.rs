@@ -62,7 +62,7 @@ impl Harvester for DruidGardenHarvester {
     async fn new_signage_point<T>(
         &self,
         signage_point: Arc<NewSignagePointHarvester>,
-        proof_handle: Arc<T>,
+        proof_handle: T,
     ) -> Result<(), Error>
     where
         T: ProofHandler + Sync + Send,
@@ -263,7 +263,7 @@ impl Harvester for DruidGardenHarvester {
     async fn request_signatures<T>(
         &self,
         request_signatures: RequestSignatures,
-        response_handle: Arc<T>,
+        response_handle: T,
     ) -> Result<(), Error>
     where
         T: SignatureHandler + Sync + Send,
@@ -433,7 +433,7 @@ async fn load_plots(
         let existing_paths = existing_paths.clone();
         let decompressor_pool = decompressor_pool.clone();
         let dir = dir.clone();
-        info!("Validating Plot Directory: {:?}", &dir);
+        debug!("Validating Plot Directory: {:?}", &dir);
         futures.push(timeout(
             Duration::from_secs(30),
             tokio::spawn(async move {
