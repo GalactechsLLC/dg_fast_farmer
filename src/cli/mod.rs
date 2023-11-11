@@ -20,13 +20,14 @@ use std::path::PathBuf;
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
-    pub action: Action,
+    pub action: Option<Action>,
     #[arg(short, long, value_name = "FILE")]
     pub config: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Action {
+    Gui {},
     Run {},
     Init {
         #[arg(short, long)]
@@ -40,6 +41,11 @@ pub enum Action {
         #[arg(short = 'n', long)]
         network: Option<String>,
     },
+}
+impl Default for Action {
+    fn default() -> Self {
+        Action::Gui {}
+    }
 }
 
 pub async fn generate_config_from_mnemonic(

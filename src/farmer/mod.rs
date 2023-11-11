@@ -36,7 +36,19 @@ static PUBLIC_CRT: &str = "farmer/public_farmer.crt";
 static PUBLIC_KEY: &str = "farmer/public_farmer.key";
 static CA_PUBLIC_CRT: &str = "ca/chia_ca.crt";
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
+pub struct GuiStats {
+    pub keys: Vec<Bytes48>,
+    pub most_recent_sp: (Bytes32, usize),
+    pub og_plot_count: usize,
+    pub nft_plot_count: usize,
+    pub compressed_plot_count: usize,
+    pub invalid_plot_count: usize,
+    pub plot_space: usize,
+    pub recent_errors: Vec<String>,
+}
+
+#[derive(Clone, Default)]
 pub struct FarmerSharedState {
     pub(crate) signage_points: Arc<Mutex<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
     pub(crate) quality_to_identifiers: Arc<Mutex<HashMap<Bytes32, FarmerIdentifier>>>,
@@ -53,6 +65,7 @@ pub struct FarmerSharedState {
     pub(crate) full_node_client: Arc<Mutex<Option<FarmerClient>>>,
     pub(crate) farmer_target: Arc<Bytes32>,
     pub(crate) pool_target: Arc<Bytes32>,
+    pub(crate) gui_stats: Arc<Mutex<GuiStats>>,
 }
 
 #[derive(Debug, Clone)]

@@ -35,3 +35,10 @@ tokio = {version = "1.33.0", features=["rt-multi-thread", "sync", "signal", "mac
 tokio-tungstenite = {version = "0.20.1", features = ["rustls-tls-webpki-roots", "rustls"] }
 uuid = {version="1.5.0", features=["v4"]}
 clap = { version = "4.4.7", features = ["derive"] }
+home = "0.5.5"
+crossterm = "0.25"
+tui = "0.19"
+tui-logger = {version = "0.10.0"}
+bytefmt = "0.1.7"
+sysinfo = "0.29.2"
+ratatui = "0.24.0"
