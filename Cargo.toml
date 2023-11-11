@@ -14,6 +14,7 @@ async-trait = "0.1.74"
 blst = "0.3.11"
 bytefmt = "0.1.7"
 clap = { version = "4.4.8", features = ["derive"] }
+chrono = "0.4.31"
 crossterm = "0.27.0"
 dialoguer = "0.11.0"
 dg_xch_cli = { version="1.1.2" }
@@ -38,6 +39,5 @@ simple_logger = "4.2.0"
 sysinfo = "0.29.2"
 tokio = {version = "1.34.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
 tokio-tungstenite = {version = "0.20.1", features = ["rustls-tls-webpki-roots", "rustls"] }
-uuid = {version="1.5.0", features=["v4"]}
-tui = "0.19"
 tui-logger = {version = "0.10.0"}
+uuid = {version="1.5.0", features=["v4"]}

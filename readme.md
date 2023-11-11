@@ -27,10 +27,15 @@ Running
 
 To generate the farmer config:
 ```
-ff -c "/path/to/config/farmer.yaml" init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_RPC_PORT -n SELECTED_NETWORK
+ff init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_RPC_PORT -n SELECTED_NETWORK
 ```
 
-To run the Farmer:
+To run the Farmer with TUI Interface(Default):
 ```
-ff -c "/path/to/config/farmer.yaml" run
+ff
+```
+
+To run the Farmer in CLI mode:
+```
+ff run
 ```

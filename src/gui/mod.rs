@@ -6,7 +6,7 @@ use crossterm::{
 use std::io::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::style::Stylize;
 use ratatui::{prelude::*, widgets::*};
@@ -16,6 +16,7 @@ use tui_logger::*;
 use crate::farmer::config::{load_keys, Config};
 use crate::farmer::{Farmer, FarmerSharedState, GuiStats};
 use crate::tasks::pool_state_updater::pool_updater;
+use chrono::prelude::*;
 use dg_xch_clients::api::full_node::FullnodeAPI;
 use dg_xch_clients::api::pool::DefaultPoolClient;
 use dg_xch_clients::rpc::full_node::FullnodeClient;
@@ -113,20 +114,24 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
             config.ssl_root_path.clone(),
             &None,
         );
+        let mut last_update = Instant::now();
         loop {
-            let bc_state = full_node_rpc.get_blockchain_state().await;
-            match bc_state {
-                Ok(bc_state) => {
-                    *fullnode_state.fullnode_state.lock().await = Some(FullNodeState {
-                        blockchain_state: bc_state,
-                    });
+            if last_update.elapsed().as_secs() > 5 {
+                last_update = Instant::now();
+                let bc_state = full_node_rpc.get_blockchain_state().await;
+                match bc_state {
+                    Ok(bc_state) => {
+                        *fullnode_state.fullnode_state.lock().await = Some(FullNodeState {
+                            blockchain_state: bc_state,
+                        });
+                    }
+                    Err(e) => {
+                        error!("{:?}", e);
+                    }
                 }
-                Err(e) => {
-                    error!("{:?}", e);
+                if !fullnode_state.farmer_state.run.load(Ordering::Relaxed) {
+                    break;
                 }
-            }
-            if !fullnode_state.farmer_state.run.load(Ordering::Relaxed) {
-                break;
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -251,11 +256,11 @@ fn ui(
         .constraints(
             [
                 Constraint::Percentage(10),
-                Constraint::Percentage(35),
-                Constraint::Percentage(40),
-                Constraint::Percentage(5),
-                Constraint::Percentage(5),
-                Constraint::Percentage(5),
+                Constraint::Percentage(30),
+                Constraint::Percentage(31),
+                Constraint::Percentage(10),
+                Constraint::Percentage(9),
+                Constraint::Percentage(10),
             ]
             .as_ref(),
         )
@@ -266,18 +271,58 @@ fn ui(
             "\t  Process State: Running\n\
              \t  Plot Count: {:#?}\n\
              \t  Total Space: {} ({:#?})\n\
-             \t  Most Recent Signage Point: {} ({})\n\
-             \t  Keys Farming: {:#?}",
+             \t  Most Recent Signage Point: \n    {:#?} ({:#?})",
             farmer_state.total_plot_count,
             bytefmt::format_to(farmer_state.total_plot_space, bytefmt::Unit::TIB),
             farmer_state.total_plot_space,
-            farmer_state.most_recent_sp.1,
             farmer_state.most_recent_sp.0,
-            farmer_state.keys,
+            farmer_state.most_recent_sp.1,
         )
     };
 
-    let fullnode_info = { format!("\t   Blockchain State: {:#?}\n", fullnode_state,) };
+    let mut height: u32 = 0;
+    let mut timestamp: u64 = 0;
+    let mut sync: bool = false;
+    let mut difficulty: u64 = 0;
+    let mut space: u128 = 0;
+    let mut mempool_size: u64 = 0;
+
+    if let Some(full_node) = fullnode_state {
+        if let Some(peak) = full_node.blockchain_state.peak {
+            height = peak.height;
+            if let Some(_timestamp) = peak.timestamp {
+                timestamp = _timestamp;
+            }
+        }
+        sync = full_node.blockchain_state.sync.synced;
+        difficulty = full_node.blockchain_state.difficulty;
+        space = full_node.blockchain_state.space;
+        mempool_size = full_node.blockchain_state.mempool_size;
+    }
+    let formatted_timestamp: String = if timestamp != 0 {
+        let naive = NaiveDateTime::from_timestamp_opt(timestamp as i64, 0);
+        let datetime: DateTime<Utc> =
+            DateTime::from_naive_utc_and_offset(naive.unwrap_or_default(), Utc);
+        datetime.format("%d-%m-%Y %H:%M:%S").to_string()
+    } else {
+        "N/A".to_string()
+    };
+    let fullnode_info = {
+        format!(
+            "\t  Blockchain Sync: {:#?}\n\
+            \t  Blockchain Height: {:#?}\n\
+            \t  Timestamp: {}\n\
+            \t  Blockchain Space: {:.3} EB\n\
+            \t  Blockchain Difficulty: {:#?}\n\
+            \t  Blockchain Mempool Size: {:#?}\n",
+            sync,
+            height,
+            formatted_timestamp,
+            (space as f64 / 1000_f64 / 1000_f64 / 1000_f64 / 1000_f64 / 1000_f64 / 1000_f64),
+            difficulty,
+            mempool_size,
+        )
+    };
 
     let farmer_content = Paragraph::new(farmer_info).block(
         Block::default()

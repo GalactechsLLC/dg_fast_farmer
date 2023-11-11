@@ -1,4 +1,4 @@
-use crate::cli::{generate_config_from_mnemonic, Action, Cli};
+use crate::cli::{generate_config_from_mnemonic, Action, Cli, GenerateConfig};
 use crate::farmer::config::{load_keys, Config};
 use crate::farmer::{Farmer, FarmerSharedState};
 use crate::tasks::pool_state_updater::pool_updater;
@@ -18,6 +18,7 @@ use std::io::Error;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use tokio::fs::create_dir_all;
 use tokio::join;
 use tokio::task::JoinHandle;
 
@@ -62,11 +63,13 @@ fn get_root_path() -> PathBuf {
     prefix.as_path().join(Path::new(".config/fast_farmer/"))
 }
 
-fn get_config_path() -> PathBuf{
-    get_root_path().as_path().join(Path::new("fast_farmer.yaml"))
+fn get_config_path() -> PathBuf {
+    get_root_path()
+        .as_path()
+        .join(Path::new("fast_farmer.yaml"))
 }
 
-fn get_ssl_root_path(shared_state: &FarmerSharedState) -> PathBuf{
+fn get_ssl_root_path(shared_state: &FarmerSharedState) -> PathBuf {
     if let Some(ssl_root_path) = &shared_state.config.ssl_root_path {
         PathBuf::from(ssl_root_path)
     } else {
@@ -80,14 +83,18 @@ async fn main() -> Result<(), Error> {
     let config_path = if let Some(s) = &cli.config {
         PathBuf::from(s)
     } else {
+        create_dir_all(get_root_path()).await?;
         get_config_path()
     };
     let action = cli.action.unwrap_or_default();
     match action {
         Action::Gui {} => {
             if !config_path.exists() {
-                eprintln!("Failed to find config at {:?}, please run init", config_path);
-                return Ok(())
+                eprintln!(
+                    "Failed to find config at {:?}, please run init",
+                    config_path
+                );
+                return Ok(());
             }
             let config = Config::try_from(&config_path).unwrap_or_default();
             let config_arc = Arc::new(config);
@@ -96,8 +103,11 @@ async fn main() -> Result<(), Error> {
         }
         Action::Run {} => {
             if !config_path.exists() {
-                eprintln!("Failed to find config at {:?}, please run init", config_path);
-                return Ok(())
+                eprintln!(
+                    "Failed to find config at {:?}, please run init",
+                    config_path
+                );
+                return Ok(());
             }
             SimpleLogger::new().env().init().unwrap_or_default();
             let config = Config::try_from(&config_path).unwrap_or_default();
@@ -148,19 +158,23 @@ async fn main() -> Result<(), Error> {
             mnemonic,
             fullnode_host,
             fullnode_port,
+            fullnode_rpc_host,
+            fullnode_rpc_port,
             fullnode_ssl,
             network,
         } => {
             SimpleLogger::new().env().init().unwrap_or_default();
-            generate_config_from_mnemonic(
-                Some(config_path),
-                &mnemonic,
-                &fullnode_host,
+            generate_config_from_mnemonic(GenerateConfig {
+                output_path: Some(config_path),
+                mnemonic: &mnemonic,
+                fullnode_host: &fullnode_host,
                 fullnode_port,
+                fullnode_rpc_host,
+                fullnode_rpc_port,
                 fullnode_ssl,
                 network,
-                None,
-            )
+                additional_headers: None,
+            })
             .await?;
             Ok(())
         }

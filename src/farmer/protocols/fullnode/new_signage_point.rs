@@ -90,7 +90,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
         for (_, harvester) in self.harvesters.iter() {
             let harvester_point = harvester_point.clone();
             let harvesters = self.harvesters.clone();
-            let harvester_partial_id = self.harvester_id.clone();
+            let harvester_partial_id = self.harvester_id;
             let pool_client = self.pool_client.clone();
             let shared_state = self.shared_state.clone();
             let constants = self.constants;
