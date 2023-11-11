@@ -129,9 +129,9 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
                         error!("{:?}", e);
                     }
                 }
-                if !fullnode_state.farmer_state.run.load(Ordering::Relaxed) {
-                    break;
-                }
+            }
+            if !fullnode_state.farmer_state.run.load(Ordering::Relaxed) {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
