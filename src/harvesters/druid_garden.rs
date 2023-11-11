@@ -156,7 +156,7 @@ impl Harvester for DruidGardenHarvester {
                             {
                                 if required_iters < sp_interval_iters {
                                     info!("Plot: {}, Passed Required Iterations, Loading Index: {}", path.file_name, index);
-                                    match plot_info.reader.fetch_proof(index).await { //Un Ordered
+                                    match plot_info.reader.fetch_ordered_proof(index).await {
                                         Ok(proof) => {
                                             let proof_bytes = proof_to_bytes(&proof);
                                             debug!(

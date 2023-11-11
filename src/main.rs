@@ -7,7 +7,7 @@ use dg_xch_clients::api::pool::DefaultPoolClient;
 use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, MAINNET};
 use dg_xch_keys::decode_puzzle_hash;
 use hex::encode;
-use log::{info, warn};
+use log::{info, warn, LevelFilter};
 use once_cell::sync::Lazy;
 use reqwest::header::USER_AGENT;
 use simple_logger::SimpleLogger;
@@ -39,7 +39,10 @@ fn version_test() {
 
 pub static HEADERS: Lazy<HashMap<String, String>> = Lazy::new(|| {
     let mut headers = HashMap::new();
-    headers.insert(String::from("X-fast-farmer-version"), version());
+    headers.insert(
+        String::from("X-fast-farmer-version"),
+        _version().to_string(),
+    );
     headers.insert(USER_AGENT.to_string(), version());
     headers.insert(String::from("X-dg-xch-pos-version"), dg_xch_pos::version());
     headers
@@ -53,7 +56,12 @@ pub mod tasks;
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
-    SimpleLogger::new().env().init().unwrap_or_default();
+    SimpleLogger::new()
+        .with_level(LevelFilter::Info)
+        .env()
+        .with_colors(true)
+        .init()
+        .unwrap_or_default();
     match cli.action {
         Action::Run {} => {
             let config_path = cli.config.unwrap_or_else(|| String::from("./farmer.yaml"));
