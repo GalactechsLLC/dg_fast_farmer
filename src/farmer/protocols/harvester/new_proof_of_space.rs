@@ -32,6 +32,7 @@ pub struct NewProofOfSpaceHandle<T: PoolClient + Sized + Sync + Send + 'static> 
     pub pool_client: Arc<T>,
     pub shared_state: Arc<FarmerSharedState>,
     pub harvester_id: Uuid,
+    pub harvester_partial_id: Bytes32,
     pub harvesters: Arc<HashMap<Uuid, Arc<Harvesters>>>,
     pub constants: &'static ConsensusConstants,
 }
@@ -186,7 +187,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
                             proof_of_space: new_pos.proof.clone(),
                             sp_hash: new_pos.sp_hash,
                             end_of_sub_slot: new_pos.signage_point_index == 0,
-                            harvester_id: Bytes32::new(&hash_256(self.harvester_id)),
+                            harvester_id: self.harvester_partial_id,
                         };
                         let payload_bytes = hash_256(payload.to_bytes());
                         let request = RequestSignatures {

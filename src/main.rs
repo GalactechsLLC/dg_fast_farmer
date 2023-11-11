@@ -1,4 +1,4 @@
-use crate::cli::{generate_config_from_mnemonic, Action, Cli};
+use crate::cli::{generate_config_from_mnemonic, Action, Cli, GenerateConfig};
 use crate::farmer::config::{load_keys, Config};
 use crate::farmer::{Farmer, FarmerSharedState};
 use crate::tasks::pool_state_updater::pool_updater;
@@ -7,7 +7,8 @@ use dg_xch_clients::api::pool::DefaultPoolClient;
 use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, MAINNET};
 use dg_xch_keys::decode_puzzle_hash;
 use hex::encode;
-use log::{info, warn, LevelFilter};
+use home::home_dir;
+use log::info;
 use once_cell::sync::Lazy;
 use reqwest::header::USER_AGENT;
 use simple_logger::SimpleLogger;
@@ -17,8 +18,8 @@ use std::io::Error;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use tokio::fs::create_dir_all;
 use tokio::join;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 fn _version() -> &'static str {
@@ -50,26 +51,67 @@ pub static HEADERS: Lazy<HashMap<String, String>> = Lazy::new(|| {
 
 pub mod cli;
 pub mod farmer;
+pub mod gui;
 pub mod harvesters;
 pub mod tasks;
+
+fn get_root_path() -> PathBuf {
+    let prefix = match home_dir() {
+        Some(path) => path,
+        None => Path::new("/").to_path_buf(),
+    };
+    prefix.as_path().join(Path::new(".config/fast_farmer/"))
+}
+
+fn get_config_path() -> PathBuf {
+    get_root_path()
+        .as_path()
+        .join(Path::new("fast_farmer.yaml"))
+}
+
+fn get_ssl_root_path(shared_state: &FarmerSharedState) -> PathBuf {
+    if let Some(ssl_root_path) = &shared_state.config.ssl_root_path {
+        PathBuf::from(ssl_root_path)
+    } else {
+        get_root_path().as_path().join(Path::new("ssl/"))
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
-    SimpleLogger::new()
-        .with_level(LevelFilter::Info)
-        .env()
-        .with_colors(true)
-        .init()
-        .unwrap_or_default();
-    match cli.action {
-        Action::Run {} => {
-            let config_path = cli.config.unwrap_or_else(|| String::from("./farmer.yaml"));
-            let path = Path::new(&config_path);
-            if !path.exists() {
-                warn!("No Config Found at {:?}, will use default", config_path);
+    let config_path = if let Some(s) = &cli.config {
+        PathBuf::from(s)
+    } else {
+        create_dir_all(get_root_path()).await?;
+        get_config_path()
+    };
+    let action = cli.action.unwrap_or_default();
+    match action {
+        Action::Gui {} => {
+            if !config_path.exists() {
+                eprintln!(
+                    "Failed to find config at {:?}, please run init",
+                    config_path
+                );
+                return Ok(());
             }
-            let config_arc = Arc::new(Config::try_from(path).unwrap());
+            let config = Config::try_from(&config_path).unwrap_or_default();
+            let config_arc = Arc::new(config);
+            gui::bootstrap(config_arc).await?;
+            Ok(())
+        }
+        Action::Run {} => {
+            if !config_path.exists() {
+                eprintln!(
+                    "Failed to find config at {:?}, please run init",
+                    config_path
+                );
+                return Ok(());
+            }
+            SimpleLogger::new().env().init().unwrap_or_default();
+            let config = Config::try_from(&config_path).unwrap_or_default();
+            let config_arc = Arc::new(config);
             let constants = CONSENSUS_CONSTANTS_MAP
                 .get(&config_arc.selected_network)
                 .unwrap_or(&MAINNET);
@@ -84,21 +126,15 @@ async fn main() -> Result<(), Error> {
             let farmer_target = decode_puzzle_hash(farmer_target_encoded)?;
             let pool_target = decode_puzzle_hash(farmer_target_encoded)?;
             let shared_state = Arc::new(FarmerSharedState {
-                signage_points: Arc::new(Default::default()),
-                quality_to_identifiers: Arc::new(Mutex::new(HashMap::new())),
-                proofs_of_space: Arc::new(Default::default()),
-                cache_time: Arc::new(Default::default()),
-                pool_states: Arc::new(Default::default()),
                 farmer_private_keys: Arc::new(farmer_private_keys),
                 owner_secret_keys: Arc::new(owner_secret_keys),
                 auth_secret_keys: Arc::new(auth_secret_keys),
                 pool_public_keys: Arc::new(pool_public_keys),
                 config: config_arc.clone(),
                 run: Arc::new(AtomicBool::new(true)),
-                force_pool_update: Default::default(),
-                full_node_client: Arc::new(Default::default()),
                 farmer_target: Arc::new(farmer_target),
                 pool_target: Arc::new(pool_target),
+                ..Default::default()
             });
 
             info!("Using Additional Headers: {:?}", &*HEADERS);
@@ -122,22 +158,23 @@ async fn main() -> Result<(), Error> {
             mnemonic,
             fullnode_host,
             fullnode_port,
+            fullnode_rpc_host,
+            fullnode_rpc_port,
             fullnode_ssl,
             network,
         } => {
-            let output_path = cli
-                .config
-                .map(|p| PathBuf::from(p.as_str()))
-                .unwrap_or_else(|| PathBuf::from("./farmer.yaml"));
-            generate_config_from_mnemonic(
-                Some(output_path),
-                &mnemonic,
-                &fullnode_host,
+            SimpleLogger::new().env().init().unwrap_or_default();
+            generate_config_from_mnemonic(GenerateConfig {
+                output_path: Some(config_path),
+                mnemonic: &mnemonic,
+                fullnode_host: &fullnode_host,
                 fullnode_port,
+                fullnode_rpc_host,
+                fullnode_rpc_port,
                 fullnode_ssl,
                 network,
-                None,
-            )
+                additional_headers: None,
+            })
             .await?;
             Ok(())
         }

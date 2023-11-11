@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 pub struct NewSignagePointHandle<T: PoolClient + Sized + Sync + Send + 'static> {
     pub id: Uuid,
+    pub harvester_id: Bytes32,
     pub pool_state: Arc<Mutex<HashMap<Bytes32, FarmerPoolState>>>,
     pub pool_client: Arc<T>,
     pub signage_points: Arc<Mutex<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
@@ -58,6 +59,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             "New Signage Point({}): {:?}",
             sp.signage_point_index, sp.challenge_hash
         );
+        *self.shared_state.last_sp_timestamp.lock().await = Instant::now();
         let harvester_point = Arc::new(NewSignagePointHarvester {
             challenge_hash: sp.challenge_hash,
             difficulty: sp.difficulty,
@@ -70,6 +72,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             .lock()
             .await
             .insert(sp.challenge_chain_sp, Instant::now());
+        self.shared_state.gui_stats.lock().await.most_recent_sp =
+            (sp.challenge_hash, sp.signage_point_index);
         match self
             .signage_points
             .lock()
@@ -86,6 +90,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
         for (_, harvester) in self.harvesters.iter() {
             let harvester_point = harvester_point.clone();
             let harvesters = self.harvesters.clone();
+            let harvester_partial_id = self.harvester_id;
             let pool_client = self.pool_client.clone();
             let shared_state = self.shared_state.clone();
             let constants = self.constants;
@@ -97,6 +102,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
                             pool_client,
                             shared_state,
                             harvester_id: harvester.uuid(),
+                            harvester_partial_id,
                             harvesters,
                             constants,
                         };

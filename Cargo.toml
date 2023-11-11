@@ -12,6 +12,10 @@ path="src/main.rs"
 [dependencies]
 async-trait = "0.1.74"
 blst = "0.3.11"
+bytefmt = "0.1.7"
+clap = { version = "4.4.8", features = ["derive"] }
+chrono = "0.4.31"
+crossterm = "0.27.0"
 dialoguer = "0.11.0"
 dg_xch_cli = { version="1.1.2" }
 dg_xch_clients = { version="1.1.2" }
@@ -23,15 +27,17 @@ dg_xch_puzzles = { version="1.1.2" }
 dg_xch_serialize = { version="1.1.2" }
 futures-util = "0.3.29"
 hex = "0.4.3"
-hyper-tungstenite = "0.11.1"
+home = "0.5.5"
 log = "0.4.20"
 once_cell = "1.18.0"
-reqwest = {version="0.11.22", features =["rustls-tls", "json"]}
+ratatui = "0.24.0"
+reqwest = {version="0.11.22", default-features = false, features =["rustls-tls", "json"]}
 serde = {version="1.0.192", features = ["derive"]}
 serde_json = "1.0.108"
 serde_yaml = "0.9.27"
 simple_logger = "4.2.0"
+sysinfo = "0.29.2"
 tokio = {version = "1.34.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
 tokio-tungstenite = {version = "0.20.1", features = ["rustls-tls-webpki-roots", "rustls"] }
+tui-logger = {version = "0.10.0"}
 uuid = {version="1.5.0", features=["v4"]}
-clap = { version = "4.4.8", features = ["derive"] }

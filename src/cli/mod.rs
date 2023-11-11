@@ -20,13 +20,14 @@ use std::path::PathBuf;
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
-    pub action: Action,
+    pub action: Option<Action>,
     #[arg(short, long, value_name = "FILE")]
     pub config: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Action {
+    Gui {},
     Run {},
     Init {
         #[arg(short, long)]
@@ -35,23 +36,38 @@ pub enum Action {
         fullnode_host: String,
         #[arg(short = 'p', long)]
         fullnode_port: u16,
+        #[arg(short = 'r', long)]
+        fullnode_rpc_host: Option<String>,
+        #[arg(short = 'o', long)]
+        fullnode_rpc_port: Option<u16>,
         #[arg(short = 's', long)]
         fullnode_ssl: Option<String>,
         #[arg(short = 'n', long)]
         network: Option<String>,
     },
 }
+impl Default for Action {
+    fn default() -> Self {
+        Action::Gui {}
+    }
+}
+
+pub struct GenerateConfig<'a> {
+    pub output_path: Option<PathBuf>,
+    pub mnemonic: &'a str,
+    pub fullnode_host: &'a str,
+    pub fullnode_port: u16,
+    pub fullnode_rpc_host: Option<String>,
+    pub fullnode_rpc_port: Option<u16>,
+    pub fullnode_ssl: Option<String>,
+    pub network: Option<String>,
+    pub additional_headers: Option<HashMap<String, String>>,
+}
 
 pub async fn generate_config_from_mnemonic(
-    output_path: Option<PathBuf>,
-    mnemonic: &str,
-    fullnode_host: &str,
-    fullnode_port: u16,
-    fullnode_ssl: Option<String>,
-    network: Option<String>,
-    additional_headers: Option<HashMap<String, String>>,
+    gen_settings: GenerateConfig<'_>,
 ) -> Result<Config, Error> {
-    if let Some(op) = &output_path {
+    if let Some(op) = &gen_settings.output_path {
         if op.exists()
             && !Confirm::new()
                 .with_prompt(format!(
@@ -70,7 +86,8 @@ pub async fn generate_config_from_mnemonic(
         }
     }
     let mut config = Config::default();
-    let network = network
+    let network = gen_settings
+        .network
         .map(|v| {
             if CONSENSUS_CONSTANTS_MAP.contains_key(&v) {
                 v
@@ -80,19 +97,23 @@ pub async fn generate_config_from_mnemonic(
         })
         .unwrap_or("mainnet".to_string());
     config.selected_network = network;
-    let master_key = key_from_mnemonic(mnemonic)?;
-    config.fullnode_host = fullnode_host.to_string();
-    config.fullnode_port = if fullnode_port == 8555 {
+    let master_key = key_from_mnemonic(gen_settings.mnemonic)?;
+    config.fullnode_host = gen_settings.fullnode_host.to_string();
+    config.fullnode_port = if gen_settings.fullnode_port == 8555 {
         8444
     } else {
-        fullnode_port
+        gen_settings.fullnode_port
     };
-    config.ssl_root_path = fullnode_ssl.clone();
+    config.ssl_root_path = gen_settings.fullnode_ssl.clone();
     let client = FullnodeClient::new(
-        fullnode_host,
-        fullnode_port,
-        fullnode_ssl,
-        &additional_headers,
+        &gen_settings
+            .fullnode_rpc_host
+            .unwrap_or(gen_settings.fullnode_host.to_string()),
+        gen_settings
+            .fullnode_rpc_port
+            .unwrap_or(gen_settings.fullnode_port),
+        gen_settings.fullnode_ssl,
+        &gen_settings.additional_headers,
     );
     let mut page = 0;
     let mut plotnfs = vec![];
@@ -166,7 +187,7 @@ pub async fn generate_config_from_mnemonic(
             });
         }
     }
-    if let Some(op) = &output_path {
+    if let Some(op) = &gen_settings.output_path {
         config.save_as_yaml(op)?;
     }
     Ok(config)
