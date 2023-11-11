@@ -15,7 +15,7 @@ use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::env;
 use std::io::Error;
-use std::path::{Path};
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::join;

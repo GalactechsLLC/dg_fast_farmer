@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::io::Error;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::Mutex;
 
 const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
@@ -68,6 +68,10 @@ pub async fn pool_updater(shared_state: Arc<FarmerSharedState>) {
             .await;
             first = false;
             last_update = Instant::now();
+            shared_state.gui_stats.lock().await.last_pool_update = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("System Time should be Greater than Epoch")
+                .as_secs();
             shared_state
                 .force_pool_update
                 .store(false, Ordering::Relaxed);

@@ -39,13 +39,10 @@ static CA_PUBLIC_CRT: &str = "ca/chia_ca.crt";
 #[derive(Clone, Default)]
 pub struct GuiStats {
     pub keys: Vec<Bytes48>,
-    pub most_recent_sp: (Bytes32, usize),
-    pub og_plot_count: usize,
-    pub nft_plot_count: usize,
-    pub compressed_plot_count: usize,
-    pub invalid_plot_count: usize,
-    pub plot_space: usize,
-    pub recent_errors: Vec<String>,
+    pub most_recent_sp: (Bytes32, u8),
+    pub total_plot_count: u64,
+    pub total_plot_space: u64,
+    pub last_pool_update: u64,
 }
 
 #[derive(Clone, Default)]
@@ -123,8 +120,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
         shared_state: Arc<FarmerSharedState>,
         pool_client: Arc<T>,
     ) -> Result<Self, Error> {
-        let harvesters =
-            load_harvesters(shared_state.config.clone(), shared_state.run.clone()).await?;
+        let harvesters = load_harvesters(shared_state.clone()).await?;
         Ok(Self {
             shared_state,
             harvesters,
@@ -184,7 +180,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                         .await
                         .iter()
                         .filter_map(|(k, v)| {
-                            if v.elapsed() > Duration::from_secs(3600) {
+                            if v.elapsed() > Duration::from_secs(1800) {
                                 Some(*k)
                             } else {
                                 None

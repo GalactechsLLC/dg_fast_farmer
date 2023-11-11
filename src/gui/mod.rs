@@ -1,7 +1,5 @@
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-    },
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -202,26 +200,23 @@ async fn run_gui<B: Backend>(
     loop {
         {
             let farmer_state = gui_state.farmer_state.gui_stats.lock().await.clone();
-            let sys_info = gui_state.system_info.lock().await.clone();
+            let sys_info = *gui_state.system_info.lock().await;
             let fullnode_state = gui_state.fullnode_state.lock().await.clone();
             terminal.draw(|f| ui(f, farmer_state, fullnode_state, sys_info))?;
         }
         if event::poll(Duration::from_millis(100))? {
-            match event::read()? {
-                Event::Key(KeyEvent {
-                    code, modifiers, ..
-                }) => match code {
+            if let Event::Key(event) = event::read()? {
+                match event.code {
                     KeyCode::Esc => {
                         gui_state.farmer_state.run.store(false, Ordering::Relaxed);
                     }
                     KeyCode::Char('c') => {
-                        if modifiers == KeyModifiers::CONTROL {
+                        if event.modifiers == KeyModifiers::CONTROL {
                             gui_state.farmer_state.run.store(false, Ordering::Relaxed);
                         }
                     }
                     _ => {}
-                },
-                _ => {}
+                }
             }
         }
         if !gui_state.farmer_state.run.load(Ordering::Relaxed) {
@@ -240,29 +235,26 @@ fn ui(
     let size = f.size();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
-        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+        .constraints([Constraint::Percentage(100)].as_ref())
         .split(size);
 
     let block = Block::default().on_black().gray();
     f.render_widget(block, size);
-    let title = Block::default().borders(Borders::ALL).title("Fast Farmer");
-    f.render_widget(title, chunks[0]);
 
     let wrapper_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)].as_ref())
-        .split(chunks[1]);
+        .split(chunks[0]);
 
     let overview_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Percentage(32),
-                Constraint::Percentage(20),
-                Constraint::Percentage(31),
-                Constraint::Percentage(6),
-                Constraint::Percentage(6),
+                Constraint::Percentage(10),
+                Constraint::Percentage(35),
+                Constraint::Percentage(40),
+                Constraint::Percentage(5),
+                Constraint::Percentage(5),
                 Constraint::Percentage(5),
             ]
             .as_ref(),
@@ -272,29 +264,16 @@ fn ui(
     let farmer_info = {
         format!(
             "\t  Process State: Running\n\
-             \t  Keys Farming: {:#?}\n\
-             \t  Most Recent Signage Point: {:#?} [ {:#?} ]\n\
-             \t  {:#?}\n",
-            farmer_state.keys,
+             \t  Plot Count: {:#?}\n\
+             \t  Total Space: {} ({:#?})\n\
+             \t  Most Recent Signage Point: {} ({})\n\
+             \t  Keys Farming: {:#?}",
+            farmer_state.total_plot_count,
+            bytefmt::format_to(farmer_state.total_plot_space, bytefmt::Unit::TIB),
+            farmer_state.total_plot_space,
             farmer_state.most_recent_sp.1,
             farmer_state.most_recent_sp.0,
-            farmer_state.recent_errors,
-        )
-    };
-
-    let harvester_info = {
-        format!(
-            "\t  OG Plot Count: {:#?}\n\
-             \t  NFT Plot Count: {:#?}\n\
-             \t  Compressed Plot Count: {:#?}\n\
-             \t  Invalid Plot Count: {:#?}\n\
-             \t  Plot Space: {:#?} ({:#?})\n",
-            farmer_state.og_plot_count,
-            farmer_state.nft_plot_count,
-            farmer_state.compressed_plot_count,
-            farmer_state.invalid_plot_count,
-            bytefmt::format_to(farmer_state.plot_space as u64, bytefmt::Unit::TIB),
-            farmer_state.plot_space,
+            farmer_state.keys,
         )
     };
 
@@ -305,13 +284,12 @@ fn ui(
             .title("Farmer Information: ")
             .borders(Borders::ALL),
     );
-    f.render_widget(farmer_content, overview_chunks[0]);
-    let harvester_content = Paragraph::new(harvester_info).block(
-        Block::default()
-            .title("Harvester Information: ")
-            .borders(Borders::ALL),
-    );
-    f.render_widget(harvester_content, overview_chunks[1]);
+    let title = Paragraph::new(" __            __                  \n|_   _   _ |_ |_   _   _  _   _  _ \n|   (_| _) |_ |   (_| |  ||| (- |  \n\n To Select/Copy: Hold Shift   To Quit: ESC or CTL+C")
+        .style(Style::default().fg(Color::Green)).block(
+        Block::default(),
+    ).alignment(Alignment::Center);
+    f.render_widget(title, overview_chunks[0]);
+    f.render_widget(farmer_content, overview_chunks[1]);
     let fullnode_content = Paragraph::new(fullnode_info).block(
         Block::default()
             .title("Fullnode Information: ")

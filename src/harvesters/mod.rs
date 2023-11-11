@@ -1,6 +1,6 @@
 pub mod druid_garden;
 
-use crate::farmer::config::Config;
+use crate::farmer::FarmerSharedState;
 use crate::harvesters::druid_garden::DruidGardenHarvester;
 use async_trait::async_trait;
 use blst::min_pk::SecretKey;
@@ -8,10 +8,10 @@ use dg_xch_clients::protocols::harvester::{
     NewProofOfSpace, NewSignagePointHarvester, RequestSignatures, RespondSignatures,
 };
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
+use log::error;
 use std::collections::HashMap;
 use std::io::Error;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -49,13 +49,12 @@ pub enum Harvesters {
 }
 
 pub async fn load_harvesters(
-    config: Arc<Config>,
-    shutdown_signal: Arc<AtomicBool>,
+    shared_state: Arc<FarmerSharedState>,
 ) -> Result<Arc<HashMap<Uuid, Arc<Harvesters>>>, Error> {
     let mut harvesters: HashMap<Uuid, Arc<Harvesters>> = HashMap::new();
     let mut farmer_public_keys = vec![];
     let mut pool_public_keys = vec![];
-    for farmer_info in &config.farmer_info {
+    for farmer_info in &shared_state.config.farmer_info {
         let f_sk: SecretKey = farmer_info.farmer_secret_key.into();
         farmer_public_keys.push(f_sk.sk_to_pk().to_bytes().into());
         if let Some(pk) = farmer_info.pool_secret_key {
@@ -63,12 +62,21 @@ pub async fn load_harvesters(
             pool_public_keys.push(p_sk.sk_to_pk().to_bytes().into());
         }
     }
-    let pool_contract_hashes = config
+    shared_state.gui_stats.lock().await.keys = farmer_public_keys.clone();
+    let pool_contract_hashes = shared_state
+        .config
         .pool_info
         .iter()
         .map(|w| w.p2_singleton_puzzle_hash)
         .collect::<Vec<Bytes32>>();
-    if let Some(bb_config) = &config.harvester_configs.bladebit {
+    let mut sum = 0;
+    let mut total_size = 0;
+    if let Some(bb_config) = &shared_state.config.harvester_configs.bladebit {
+        for dir in &bb_config.plot_directories {
+            if let Err(e) = count_plots(Path::new(&dir), &mut sum, &mut total_size).await {
+                error!("Error Counting Plots: {e:?}")
+            }
+        }
         let harvester = DruidGardenHarvester::new(
             bb_config
                 .plot_directories
@@ -78,8 +86,8 @@ pub async fn load_harvesters(
             farmer_public_keys,
             pool_public_keys,
             pool_contract_hashes,
-            shutdown_signal,
-            &config.selected_network,
+            shared_state.run.clone(),
+            &shared_state.config.selected_network,
         )
         .await?;
         harvesters.insert(
@@ -87,5 +95,28 @@ pub async fn load_harvesters(
             Arc::new(Harvesters::DruidGarden(harvester)),
         );
     }
+    shared_state.gui_stats.lock().await.total_plot_count = sum;
+    shared_state.gui_stats.lock().await.total_plot_space = total_size;
     Ok(Arc::new(harvesters))
+}
+
+pub static EXPECTED_UNCOMPRESSED_MIN: u64 = 0;
+
+async fn count_plots(
+    path: &Path,
+    count_total: &mut u64,
+    size_total: &mut u64,
+) -> Result<(), Error> {
+    if !path.is_dir() {
+        return Ok(());
+    }
+    let mut dir = tokio::fs::read_dir(path).await?;
+    while let Ok(Some(e)) = dir.next_entry().await {
+        if e.file_name().to_string_lossy().ends_with(".plot") {
+            let file_size = e.metadata().await?.len();
+            *size_total += file_size;
+            *count_total += 1;
+        }
+    }
+    Ok(())
 }

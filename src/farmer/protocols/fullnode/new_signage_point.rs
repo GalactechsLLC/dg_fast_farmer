@@ -70,6 +70,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             .lock()
             .await
             .insert(sp.challenge_chain_sp, Instant::now());
+        self.shared_state.gui_stats.lock().await.most_recent_sp =
+            (sp.challenge_hash, sp.signage_point_index);
         match self
             .signage_points
             .lock()
