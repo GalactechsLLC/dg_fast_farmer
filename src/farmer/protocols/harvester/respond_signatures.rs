@@ -9,12 +9,9 @@ use dg_xch_clients::protocols::harvester::RespondSignatures;
 use dg_xch_clients::protocols::ProtocolMessageTypes;
 use dg_xch_clients::websocket::{ChiaMessage, Websocket};
 use dg_xch_core::blockchain::pool_target::PoolTarget;
-use dg_xch_core::blockchain::proof_of_space::{
-    generate_plot_public_key, generate_taproot_sk, ProofBytes,
-};
+use dg_xch_core::blockchain::proof_of_space::{generate_plot_public_key, generate_taproot_sk};
 use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
 use dg_xch_core::consensus::constants::ConsensusConstants;
-use dg_xch_pos::verifier::proof_to_bytes;
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
 use hyper_tungstenite::tungstenite::Message;
@@ -79,17 +76,14 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                         return Ok(());
                     }
                 }
-                if let Some(mut pospace) = pospace {
+                if let Some(pospace) = pospace {
                     let include_taproot = pospace.pool_contract_puzzle_hash.is_some();
-                    if let Some((computed_quality_string, reordered_proof)) =
-                        verify_and_get_quality_string(
-                            &pospace,
-                            self.constants,
-                            &response.challenge_hash,
-                            &response.sp_hash,
-                        )
-                    {
-                        pospace.proof = ProofBytes::from(proof_to_bytes(&reordered_proof));
+                    if let Some(computed_quality_string) = verify_and_get_quality_string(
+                        &pospace,
+                        self.constants,
+                        &response.challenge_hash,
+                        &response.sp_hash,
+                    ) {
                         if is_sp_signatures {
                             let (challenge_chain_sp, challenge_chain_sp_harv_sig) =
                                 &response.message_signatures[0];
