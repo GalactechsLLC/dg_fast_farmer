@@ -128,7 +128,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
             if !fullnode_state.farmer_state.run.load(Ordering::Relaxed) {
                 break;
             }
-            sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     });
     let sys_info_gui_state = gui_state.clone();
@@ -162,7 +162,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
             if !sys_info_gui_state.farmer_state.run.load(Ordering::Relaxed) {
                 break;
             }
-            sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     });
     let (fn_res, sys_res, gui_res, farmer_res) = join!(
@@ -204,7 +204,7 @@ async fn run_gui<B: Backend>(
             let fullnode_state = gui_state.fullnode_state.lock().await.clone();
             terminal.draw(|f| ui(f, farmer_state, fullnode_state, sys_info))?;
         }
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(Duration::from_millis(50))? {
             if let Event::Key(event) = event::read()? {
                 match event.code {
                     KeyCode::Esc => {

@@ -14,7 +14,7 @@ use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
 use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
-use hyper_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::Message;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};

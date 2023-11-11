@@ -15,7 +15,7 @@ use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::env;
 use std::io::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::join;
@@ -54,27 +54,51 @@ pub mod gui;
 pub mod harvesters;
 pub mod tasks;
 
+fn get_root_path() -> PathBuf {
+    let prefix = match home_dir() {
+        Some(path) => path,
+        None => Path::new("/").to_path_buf(),
+    };
+    prefix.as_path().join(Path::new(".config/fast_farmer/"))
+}
+
+fn get_config_path() -> PathBuf{
+    get_root_path().as_path().join(Path::new("fast_farmer.yaml"))
+}
+
+fn get_ssl_root_path(shared_state: &FarmerSharedState) -> PathBuf{
+    if let Some(ssl_root_path) = &shared_state.config.ssl_root_path {
+        PathBuf::from(ssl_root_path)
+    } else {
+        get_root_path().as_path().join(Path::new("ssl/"))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
     let config_path = if let Some(s) = &cli.config {
-        Path::new(&s).to_path_buf()
+        PathBuf::from(s)
     } else {
-        let prefix = match home_dir() {
-            Some(path) => path,
-            None => Path::new("/").to_path_buf(),
-        };
-        prefix.as_path().join(Path::new(".config/fast_farmer.yaml"))
+        get_config_path()
     };
     let action = cli.action.unwrap_or_default();
     match action {
         Action::Gui {} => {
+            if !config_path.exists() {
+                eprintln!("Failed to find config at {:?}, please run init", config_path);
+                return Ok(())
+            }
             let config = Config::try_from(&config_path).unwrap_or_default();
             let config_arc = Arc::new(config);
             gui::bootstrap(config_arc).await?;
             Ok(())
         }
         Action::Run {} => {
+            if !config_path.exists() {
+                eprintln!("Failed to find config at {:?}, please run init", config_path);
+                return Ok(())
+            }
             SimpleLogger::new().env().init().unwrap_or_default();
             let config = Config::try_from(&config_path).unwrap_or_default();
             let config_arc = Arc::new(config);

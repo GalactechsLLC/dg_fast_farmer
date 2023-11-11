@@ -4,6 +4,7 @@ use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
 use dg_xch_keys::decode_puzzle_hash;
 use std::collections::HashMap;
 use std::fs;
+use std::fs::create_dir_all;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -50,6 +51,7 @@ pub struct Config {
 }
 impl Config {
     pub fn save_as_yaml<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        create_dir_all(path.as_ref())?;
         fs::write(
             path.as_ref(),
             serde_yaml::to_string(&self)
