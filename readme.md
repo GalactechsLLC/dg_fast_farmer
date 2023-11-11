@@ -27,7 +27,12 @@ Running
 
 To generate the farmer config:
 ```
-ff init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_RPC_PORT -n SELECTED_NETWORK
+ff init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_PORT -n SELECTED_NETWORK
+```
+
+To use a separate Fullnode for RPC calls during setup:
+```
+ff init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_PORT -r FULLNODE_RPC_HOST -o FULLNODE_RPC_PORT -n SELECTED_NETWORK
 ```
 
 To run the Farmer with TUI Interface(Default):
