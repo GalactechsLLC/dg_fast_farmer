@@ -15,7 +15,7 @@ use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::env;
 use std::io::Error;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::join;
@@ -39,7 +39,10 @@ fn version_test() {
 
 pub static HEADERS: Lazy<HashMap<String, String>> = Lazy::new(|| {
     let mut headers = HashMap::new();
-    headers.insert(String::from("X-fast-farmer-version"), version());
+    headers.insert(
+        String::from("X-fast-farmer-version"),
+        _version().to_string(),
+    );
     headers.insert(USER_AGENT.to_string(), version());
     headers.insert(String::from("X-dg-xch-pos-version"), dg_xch_pos::version());
     headers
@@ -54,11 +57,15 @@ pub mod tasks;
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
-    let prefix = match home_dir() {
-        Some(path) => path,
-        None => Path::new("/").to_path_buf(),
+    let config_path = if let Some(s) = &cli.config {
+        Path::new(&s).to_path_buf()
+    } else {
+        let prefix = match home_dir() {
+            Some(path) => path,
+            None => Path::new("/").to_path_buf(),
+        };
+        prefix.as_path().join(Path::new(".config/fast_farmer.yaml"))
     };
-    let config_path = prefix.as_path().join(Path::new(".config/fast_farmer.yaml"));
     let action = cli.action.unwrap_or_default();
     match action {
         Action::Gui {} => {
@@ -121,12 +128,8 @@ async fn main() -> Result<(), Error> {
             network,
         } => {
             SimpleLogger::new().env().init().unwrap_or_default();
-            let output_path = cli
-                .config
-                .map(|p| PathBuf::from(p.as_str()))
-                .unwrap_or_else(|| config_path);
             generate_config_from_mnemonic(
-                Some(output_path),
+                Some(config_path),
                 &mnemonic,
                 &fullnode_host,
                 fullnode_port,

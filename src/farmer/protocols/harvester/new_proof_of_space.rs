@@ -11,16 +11,13 @@ use dg_xch_clients::protocols::harvester::{NewProofOfSpace, RequestSignatures, R
 use dg_xch_clients::protocols::pool::{
     get_current_authentication_token, PoolErrorCode, PostPartialPayload, PostPartialRequest,
 };
-use dg_xch_core::blockchain::proof_of_space::{
-    generate_plot_public_key, generate_taproot_sk, ProofBytes,
-};
+use dg_xch_core::blockchain::proof_of_space::{generate_plot_public_key, generate_taproot_sk};
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, SizedBytes};
 use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
 use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_core::consensus::pot_iterations::{
     calculate_iterations_quality, calculate_sp_interval_iters,
 };
-use dg_xch_pos::verifier::proof_to_bytes;
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::{hash_256, ChiaSerialize};
 use log::{error, info, warn};
@@ -41,7 +38,7 @@ pub struct NewProofOfSpaceHandle<T: PoolClient + Sized + Sync + Send + 'static> 
 
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfSpaceHandle<T> {
-    async fn handle_proof(&self, mut new_pos: NewProofOfSpace) -> Result<(), Error> {
+    async fn handle_proof(&self, new_pos: NewProofOfSpace) -> Result<(), Error> {
         if let Some(sps) = self
             .shared_state
             .signage_points
@@ -50,7 +47,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfS
             .get(&new_pos.sp_hash)
         {
             for sp in sps {
-                if let Some((qs, reordered_proof)) = verify_and_get_quality_string(
+                if let Some(qs) = verify_and_get_quality_string(
                     &new_pos.proof,
                     self.constants,
                     &new_pos.challenge_hash,
@@ -70,7 +67,6 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfS
                     }
                     if let Some(p2_singleton_puzzle_hash) = &new_pos.proof.pool_contract_puzzle_hash
                     {
-                        new_pos.proof.proof = ProofBytes::from(proof_to_bytes(&reordered_proof));
                         self.handle_partial(p2_singleton_puzzle_hash, &qs, new_pos.clone())
                             .await?;
                     } else {
