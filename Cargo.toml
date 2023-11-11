@@ -42,3 +42,4 @@ tui-logger = {version = "0.10.0"}
 bytefmt = "0.1.7"
 sysinfo = "0.29.2"
 ratatui = "0.24.0"
+chrono = "0.4.31"

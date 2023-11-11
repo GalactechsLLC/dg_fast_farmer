@@ -27,10 +27,10 @@ Running
 
 To generate the farmer config:
 ```
-ff -c "/path/to/config/farmer.yaml" init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_RPC_PORT -n SELECTED_NETWORK
+ff -c "/path/to/config/fast_farmer.yaml" init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_RPC_PORT -n SELECTED_NETWORK
 ```
 
 To run the Farmer:
 ```
-ff -c "/path/to/config/farmer.yaml" run
+ff -c "/path/to/config/fast_farmer.yaml" run
 ```
