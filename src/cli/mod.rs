@@ -1,4 +1,4 @@
-use crate::farmer::config::{Config, FarmingInfo, PoolWalletConfig};
+use crate::farmer::config::{BladebitHarvesterConfig, Config, FarmingInfo, PoolWalletConfig};
 use clap::{Parser, Subcommand};
 use dg_xch_cli::wallets::plotnft_utils::scrounge_for_plotnfts;
 use dg_xch_clients::rpc::full_node::FullnodeClient;
@@ -44,6 +44,10 @@ pub enum Action {
         fullnode_ssl: Option<String>,
         #[arg(short = 'n', long)]
         network: Option<String>,
+        #[arg(short = 'a', long)]
+        payout_address: Option<String>,
+        #[arg(short = 'd', long = "plot-directory")]
+        plot_directories: Option<Vec<String>>,
     },
 }
 impl Default for Action {
@@ -61,6 +65,8 @@ pub struct GenerateConfig<'a> {
     pub fullnode_rpc_port: Option<u16>,
     pub fullnode_ssl: Option<String>,
     pub network: Option<String>,
+    pub payout_address: Option<String>,
+    pub plot_directories: Option<Vec<String>>,
     pub additional_headers: Option<HashMap<String, String>>,
 }
 
@@ -97,6 +103,10 @@ pub async fn generate_config_from_mnemonic(
         })
         .unwrap_or("mainnet".to_string());
     config.selected_network = network;
+    config.payout_address = gen_settings.payout_address.unwrap_or_default();
+    config.harvester_configs.bladebit = Some(BladebitHarvesterConfig {
+        plot_directories: gen_settings.plot_directories.unwrap_or_default(),
+    });
     let master_key = key_from_mnemonic(gen_settings.mnemonic)?;
     config.fullnode_ws_host = gen_settings
         .fullnode_ws_host

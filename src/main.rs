@@ -167,6 +167,8 @@ async fn main() -> Result<(), Error> {
             fullnode_rpc_port,
             fullnode_ssl,
             network,
+            payout_address,
+            plot_directories,
         } => {
             SimpleLogger::new()
                 .with_colors(true)
@@ -183,6 +185,8 @@ async fn main() -> Result<(), Error> {
                 fullnode_rpc_port,
                 fullnode_ssl,
                 network,
+                payout_address,
+                plot_directories,
                 additional_headers: None,
             })
             .await?;
