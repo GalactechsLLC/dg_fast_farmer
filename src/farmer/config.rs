@@ -41,8 +41,10 @@ pub struct HarvesterConfig {
 pub struct Config {
     pub selected_network: String,
     pub ssl_root_path: Option<String>,
-    pub fullnode_host: String,
-    pub fullnode_port: u16,
+    pub fullnode_ws_host: String,
+    pub fullnode_ws_port: u16,
+    pub fullnode_rpc_host: String,
+    pub fullnode_rpc_port: u16,
     pub farmer_info: Vec<FarmingInfo>,
     pub pool_info: Vec<PoolWalletConfig>,
     pub payout_address: String,
@@ -60,7 +62,10 @@ impl Config {
         CONSENSUS_CONSTANTS_MAP
             .get(&self.selected_network)
             .is_some()
-            && !self.fullnode_host.is_empty()
+            && !self.fullnode_ws_host.is_empty()
+            && !self.fullnode_rpc_host.is_empty()
+            && self.fullnode_ws_port != 0
+            && self.fullnode_rpc_port != 0
             && !self.farmer_info.is_empty()
             && decode_puzzle_hash(&self.payout_address).is_ok()
             && self.pool_info.iter().all(|c| {
@@ -76,8 +81,10 @@ impl Default for Config {
         Config {
             selected_network: "mainnet".to_string(),
             ssl_root_path: None,
-            fullnode_host: "localhost".to_string(),
-            fullnode_port: 8555,
+            fullnode_rpc_host: "localhost".to_string(),
+            fullnode_rpc_port: 8555,
+            fullnode_ws_host: "localhost".to_string(),
+            fullnode_ws_port: 8444,
             farmer_info: vec![],
             pool_info: vec![],
             payout_address: "".to_string(),

@@ -76,7 +76,7 @@ pub async fn pool_updater(shared_state: Arc<FarmerSharedState>) {
                 .force_pool_update
                 .store(false, Ordering::Relaxed);
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
     info!("Pool Handle Stopped");
 }

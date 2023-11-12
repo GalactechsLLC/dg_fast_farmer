@@ -109,8 +109,8 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
     let fullnode_state = gui_state.clone();
     let fullnode_thread = tokio::spawn(async move {
         let full_node_rpc = FullnodeClient::new(
-            &config.fullnode_host,
-            config.fullnode_port,
+            &config.fullnode_rpc_host,
+            config.fullnode_rpc_port,
             config.ssl_root_path.clone(),
             &None,
         );
@@ -133,7 +133,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
             if !fullnode_state.farmer_state.run.load(Ordering::Relaxed) {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
     });
     let sys_info_gui_state = gui_state.clone();
@@ -144,7 +144,8 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
         system.refresh_system();
         loop {
             let (sys, sys_info) = match spawn_blocking(move || {
-                system.refresh_system();
+                system.refresh_cpu();
+                system.refresh_memory();
                 let si = SysInfo {
                     cpu_usage: system.global_cpu_info().cpu_usage() as u16,
                     ram_usage: ((system.used_memory() as f32 / system.total_memory() as f32)
@@ -167,7 +168,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
             if !sys_info_gui_state.farmer_state.run.load(Ordering::Relaxed) {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
     });
     let (fn_res, sys_res, gui_res, farmer_res) = join!(
@@ -209,7 +210,7 @@ async fn run_gui<B: Backend>(
             let fullnode_state = gui_state.fullnode_state.lock().await.clone();
             terminal.draw(|f| ui(f, farmer_state, fullnode_state, sys_info))?;
         }
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(25))? {
             if let Event::Key(event) = event::read()? {
                 match event.code {
                     KeyCode::Esc => {
@@ -341,11 +342,11 @@ fn ui(
             .borders(Borders::ALL),
     );
     f.render_widget(fullnode_content, overview_chunks[2]);
-    let cpu_usage_widget = draw_cpu_usage(sys_info.cpu_usage);
+    let cpu_usage_widget = draw_gauge("CPU Usage", sys_info.cpu_usage);
     f.render_widget(cpu_usage_widget, overview_chunks[3]);
-    let ram_usage_widget = draw_ram_usage(sys_info.ram_usage);
+    let ram_usage_widget = draw_gauge("RAM Usage", sys_info.ram_usage);
     f.render_widget(ram_usage_widget, overview_chunks[4]);
-    let swap_usage_widget = draw_swap_usage(sys_info.swap_usage);
+    let swap_usage_widget = draw_gauge("Swap Usage", sys_info.swap_usage);
     f.render_widget(swap_usage_widget, overview_chunks[5]);
 
     let logs_widget = draw_logs();
@@ -368,26 +369,15 @@ fn draw_logs<'a>() -> TuiLoggerWidget<'a> {
         .style(Style::default().fg(Color::White).bg(Color::Black))
 }
 
-fn draw_cpu_usage<'a>(total_cpu_usage: u16) -> Gauge<'a> {
+fn draw_gauge(title: &str, value: u16) -> Gauge {
     let gauge = Gauge::default()
-        .block(Block::default().title("CPU Usage").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightGreen))
-        .percent(total_cpu_usage);
-    gauge
-}
-
-fn draw_ram_usage<'a>(total_ram_usage: u16) -> Gauge<'a> {
-    let gauge = Gauge::default()
-        .block(Block::default().title("RAM Usage").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightBlue))
-        .percent(total_ram_usage);
-    gauge
-}
-
-fn draw_swap_usage<'a>(total_swap_usage: u16) -> Gauge<'a> {
-    let gauge = Gauge::default()
-        .block(Block::default().title("Swap Usage").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightYellow))
-        .percent(total_swap_usage);
-    gauge
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .percent(value);
+    if value > 50 {
+        gauge.gauge_style(Style::default().fg(Color::LightRed))
+    } else if value > 80 {
+        gauge.gauge_style(Style::default().fg(Color::LightYellow))
+    } else {
+        gauge.gauge_style(Style::default().fg(Color::LightGreen))
+    }
 }

@@ -33,9 +33,9 @@ pub enum Action {
         #[arg(short, long)]
         mnemonic: String,
         #[arg(short = 'f', long)]
-        fullnode_host: String,
+        fullnode_ws_host: Option<String>,
         #[arg(short = 'p', long)]
-        fullnode_port: u16,
+        fullnode_ws_port: Option<u16>,
         #[arg(short = 'r', long)]
         fullnode_rpc_host: Option<String>,
         #[arg(short = 'o', long)]
@@ -55,8 +55,8 @@ impl Default for Action {
 pub struct GenerateConfig<'a> {
     pub output_path: Option<PathBuf>,
     pub mnemonic: &'a str,
-    pub fullnode_host: &'a str,
-    pub fullnode_port: u16,
+    pub fullnode_ws_host: Option<String>,
+    pub fullnode_ws_port: Option<u16>,
     pub fullnode_rpc_host: Option<String>,
     pub fullnode_rpc_port: Option<u16>,
     pub fullnode_ssl: Option<String>,
@@ -98,20 +98,18 @@ pub async fn generate_config_from_mnemonic(
         .unwrap_or("mainnet".to_string());
     config.selected_network = network;
     let master_key = key_from_mnemonic(gen_settings.mnemonic)?;
-    config.fullnode_host = gen_settings.fullnode_host.to_string();
-    config.fullnode_port = if gen_settings.fullnode_port == 8555 {
-        8444
-    } else {
-        gen_settings.fullnode_port
-    };
+    config.fullnode_ws_host = gen_settings
+        .fullnode_ws_host
+        .unwrap_or(String::from("localhost"));
+    config.fullnode_rpc_host = gen_settings
+        .fullnode_rpc_host
+        .unwrap_or(String::from("localhost"));
+    config.fullnode_ws_port = gen_settings.fullnode_ws_port.unwrap_or(8444);
+    config.fullnode_rpc_port = gen_settings.fullnode_rpc_port.unwrap_or(8555);
     config.ssl_root_path = gen_settings.fullnode_ssl.clone();
     let client = FullnodeClient::new(
-        &gen_settings
-            .fullnode_rpc_host
-            .unwrap_or(gen_settings.fullnode_host.to_string()),
-        gen_settings
-            .fullnode_rpc_port
-            .unwrap_or(gen_settings.fullnode_port),
+        &config.fullnode_rpc_host,
+        config.fullnode_rpc_port,
         gen_settings.fullnode_ssl,
         &gen_settings.additional_headers,
     );

@@ -8,7 +8,7 @@ use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, MAINNET};
 use dg_xch_keys::decode_puzzle_hash;
 use hex::encode;
 use home::home_dir;
-use log::info;
+use log::{info, LevelFilter};
 use once_cell::sync::Lazy;
 use reqwest::header::USER_AGENT;
 use simple_logger::SimpleLogger;
@@ -109,7 +109,12 @@ async fn main() -> Result<(), Error> {
                 );
                 return Ok(());
             }
-            SimpleLogger::new().env().init().unwrap_or_default();
+            SimpleLogger::new()
+                .with_colors(true)
+                .with_level(LevelFilter::Info)
+                .env()
+                .init()
+                .unwrap_or_default();
             let config = Config::try_from(&config_path).unwrap_or_default();
             let config_arc = Arc::new(config);
             let constants = CONSENSUS_CONSTANTS_MAP
@@ -156,19 +161,24 @@ async fn main() -> Result<(), Error> {
         }
         Action::Init {
             mnemonic,
-            fullnode_host,
-            fullnode_port,
+            fullnode_ws_host,
+            fullnode_ws_port,
             fullnode_rpc_host,
             fullnode_rpc_port,
             fullnode_ssl,
             network,
         } => {
-            SimpleLogger::new().env().init().unwrap_or_default();
+            SimpleLogger::new()
+                .with_colors(true)
+                .with_level(LevelFilter::Info)
+                .env()
+                .init()
+                .unwrap_or_default();
             generate_config_from_mnemonic(GenerateConfig {
                 output_path: Some(config_path),
                 mnemonic: &mnemonic,
-                fullnode_host: &fullnode_host,
-                fullnode_port,
+                fullnode_ws_host,
+                fullnode_ws_port,
                 fullnode_rpc_host,
                 fullnode_rpc_port,
                 fullnode_ssl,

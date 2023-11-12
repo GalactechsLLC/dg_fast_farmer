@@ -164,7 +164,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
             }
             info!(
                 "Starting Farmer FullNode Connection to: {}:{}",
-                &s.shared_state.config.fullnode_host, s.shared_state.config.fullnode_port
+                &s.shared_state.config.fullnode_ws_host, s.shared_state.config.fullnode_ws_port
             );
             loop {
                 if !s.shared_state.run.load(Ordering::Relaxed) {
@@ -229,8 +229,8 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     if let Some(c) = &*s.shared_state.full_node_client.lock().await {
                         info!(
                             "Shutting Down old Farmer Client: {}:{}",
-                            s.shared_state.config.fullnode_host,
-                            s.shared_state.config.fullnode_host
+                            s.shared_state.config.fullnode_ws_host,
+                            s.shared_state.config.fullnode_ws_host
                         );
                         client_run.store(false, Ordering::Relaxed);
                         c.client.lock().await.shutdown().await.unwrap_or_default();
@@ -278,7 +278,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     info!("Farmer Stopping");
                     break 'retry;
                 }
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                tokio::time::sleep(Duration::from_millis(25)).await;
             }
         }
     }
@@ -292,8 +292,8 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
         let ssl_path = get_ssl_root_path(shared_state);
         create_all_ssl(&ssl_path, false)?;
         FarmerClient::new_ssl(
-            &shared_state.config.fullnode_host,
-            shared_state.config.fullnode_port,
+            &shared_state.config.fullnode_ws_host,
+            shared_state.config.fullnode_ws_port,
             ClientSSLConfig {
                 ssl_crt_path: &ssl_path.join(PUBLIC_CRT).to_string_lossy(),
                 ssl_key_path: &ssl_path.join(PUBLIC_KEY).to_string_lossy(),

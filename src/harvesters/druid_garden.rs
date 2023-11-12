@@ -82,7 +82,7 @@ impl Harvester for DruidGardenHarvester {
             let constants_arc = constants.clone();
             let plot_counts = plot_counts.clone();
             let mut responses = vec![];
-            let plot_handle = timeout(Duration::from_secs(15), tokio::spawn(async move {
+            let plot_handle = timeout(Duration::from_secs(20), tokio::spawn(async move {
                 let (plot_id, k, memo, c_level) = match plot_info.reader.header() {
                     PlotHeader::V1(h) => (h.id, h.k, h.memo, 0),
                     PlotHeader::V2(h) => (h.id, h.k, h.memo, h.compression_level),
@@ -385,7 +385,7 @@ impl DruidGardenHarvester {
                         }
                     }
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_millis(25)).await;
             }
         });
         Ok(Self {
