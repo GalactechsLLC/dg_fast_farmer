@@ -44,6 +44,8 @@ pub enum Action {
         fullnode_ssl: Option<String>,
         #[arg(short = 'n', long)]
         network: Option<String>,
+        #[arg(short = 'a', long)]
+        payout_address: Option<String>,
     },
 }
 impl Default for Action {
@@ -61,6 +63,7 @@ pub struct GenerateConfig<'a> {
     pub fullnode_rpc_port: Option<u16>,
     pub fullnode_ssl: Option<String>,
     pub network: Option<String>,
+    pub payout_address: Option<String>,
     pub additional_headers: Option<HashMap<String, String>>,
 }
 
@@ -97,6 +100,7 @@ pub async fn generate_config_from_mnemonic(
         })
         .unwrap_or("mainnet".to_string());
     config.selected_network = network;
+    config.payout_address = gen_settings.payout_address.unwrap_or(config.payout_address);
     let master_key = key_from_mnemonic(gen_settings.mnemonic)?;
     config.fullnode_ws_host = gen_settings
         .fullnode_ws_host
