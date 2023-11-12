@@ -103,7 +103,7 @@ pub async fn generate_config_from_mnemonic(
         })
         .unwrap_or("mainnet".to_string());
     config.selected_network = network;
-    config.payout_address = gen_settings.payout_address.unwrap_or(config.payout_address);
+    config.payout_address = gen_settings.payout_address.unwrap_or_default();
     config
         .harvester_configs
         .bladebit
