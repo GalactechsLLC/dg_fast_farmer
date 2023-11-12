@@ -46,6 +46,8 @@ pub enum Action {
         network: Option<String>,
         #[arg(short = 'a', long)]
         payout_address: Option<String>,
+        #[arg(short = 'd', long = "plot-directory")]
+        plot_directories: Option<Vec<String>>,
     },
 }
 impl Default for Action {
@@ -64,6 +66,7 @@ pub struct GenerateConfig<'a> {
     pub fullnode_ssl: Option<String>,
     pub network: Option<String>,
     pub payout_address: Option<String>,
+    pub plot_directories: Option<Vec<String>>,
     pub additional_headers: Option<HashMap<String, String>>,
 }
 
@@ -101,6 +104,19 @@ pub async fn generate_config_from_mnemonic(
         .unwrap_or("mainnet".to_string());
     config.selected_network = network;
     config.payout_address = gen_settings.payout_address.unwrap_or(config.payout_address);
+    config
+        .harvester_configs
+        .bladebit
+        .as_mut()
+        .unwrap()
+        .plot_directories = gen_settings.plot_directories.unwrap_or(
+        config
+            .harvester_configs
+            .bladebit
+            .clone()
+            .unwrap()
+            .plot_directories,
+    );
     let master_key = key_from_mnemonic(gen_settings.mnemonic)?;
     config.fullnode_ws_host = gen_settings
         .fullnode_ws_host
