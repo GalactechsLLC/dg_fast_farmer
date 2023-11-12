@@ -1,4 +1,4 @@
-use crate::farmer::config::{Config, FarmingInfo, PoolWalletConfig};
+use crate::farmer::config::{BladebitHarvesterConfig, Config, FarmingInfo, PoolWalletConfig};
 use clap::{Parser, Subcommand};
 use dg_xch_cli::wallets::plotnft_utils::scrounge_for_plotnfts;
 use dg_xch_clients::rpc::full_node::FullnodeClient;
@@ -104,19 +104,9 @@ pub async fn generate_config_from_mnemonic(
         .unwrap_or("mainnet".to_string());
     config.selected_network = network;
     config.payout_address = gen_settings.payout_address.unwrap_or_default();
-    config
-        .harvester_configs
-        .bladebit
-        .as_mut()
-        .unwrap()
-        .plot_directories = gen_settings.plot_directories.unwrap_or(
-        config
-            .harvester_configs
-            .bladebit
-            .clone()
-            .unwrap()
-            .plot_directories,
-    );
+    config.harvester_configs.bladebit = Some(BladebitHarvesterConfig {
+        plot_directories: gen_settings.plot_directories.unwrap_or_default(),
+    });
     let master_key = key_from_mnemonic(gen_settings.mnemonic)?;
     config.fullnode_ws_host = gen_settings
         .fullnode_ws_host
