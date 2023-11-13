@@ -9,12 +9,9 @@ A lite farmer for the Chia Blockchain.
 Building
 --------
 
-Install Rust:
-```
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+Install Rust by following the instructions at https://www.rust-lang.org/tools/install
 
-Build from source:
+Once Rust is installed we can build from source:
 ```
 git clone https://github.com/GalactechsLLC/dg_fast_farmer.git
 cd dg_fast_farmer
