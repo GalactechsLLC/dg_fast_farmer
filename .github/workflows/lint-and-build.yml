@@ -1,0 +1,54 @@
+on:
+  workflow_call:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+      - name: Run Format
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy -- -Dwarnings
+  build:
+    name: Build
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-20.04
+            package-suffix: ubuntu
+            binary-name: ff
+          - os: macos-latest
+            package-suffix: macos
+            binary-name: ff
+          - os: windows-latest
+            package-suffix: windows
+            binary-name: ff.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build binary
+        run: cargo build --release
+      - name: Save release archive
+        uses: actions/upload-artifact@v3
+        with:
+          name: fast_farmer_${{ matrix.package-suffix }}
+          path: target/release/${{ matrix.binary-name }}

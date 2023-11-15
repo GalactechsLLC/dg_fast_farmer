@@ -1,6 +1,5 @@
 target/
 .idea/
 *.iml
-Cargo.lock
 fast_farmer.yaml
 farmer.yaml

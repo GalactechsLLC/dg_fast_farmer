@@ -1,0 +1,40 @@
+on:
+  release:
+    types: [ published ]
+
+name: Release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-build:
+    name: Lint and Build
+    uses: ./.github/workflows/lint-and-build.yml
+  publish-release:
+    name: Publish release
+    needs: lint-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the repo
+        uses: actions/checkout@v4
+      - name: Fetch release archives
+        uses: actions/download-artifact@v3
+      - name: Mark binary as executable
+        run: |
+          chmod +x fast_farmer_ubuntu/ff
+          chmod +x fast_farmer_macos/ff
+      - name: Create release zip
+        run:
+          for i in fast_farmer_*/; do zip -r -j "${i%/}.zip" "$i"; done
+      - name: Get the tag name
+        id: tag
+        run: echo TAG=${{ github.event.release.tag_name }} >> $GITHUB_OUTPUT
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ steps.tag.outputs.TAG }} fast_farmer_*.zip
