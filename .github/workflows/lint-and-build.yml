@@ -50,5 +50,5 @@ jobs:
       - name: Save release archive
         uses: actions/upload-artifact@v3
         with:
-          name: fast_farmer_${{ matrix.package-suffix }}
+          name: ff-x86_64-${{ matrix.package-suffix }}
           path: target/release/${{ matrix.binary-name }}
