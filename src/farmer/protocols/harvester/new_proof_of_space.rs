@@ -53,6 +53,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfS
                     self.constants,
                     &new_pos.challenge_hash,
                     &new_pos.sp_hash,
+                    sp.peak_height,
                 ) {
                     let required_iters = calculate_iterations_quality(
                         self.constants.difficulty_constant_factor,
