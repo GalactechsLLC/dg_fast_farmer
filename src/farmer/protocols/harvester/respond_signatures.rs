@@ -49,6 +49,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                     .signage_point_index;
                 let mut is_sp_signatures = false;
                 let mut found_sp_hash_debug = false;
+                let peak_height = sps[0].peak_height;
                 for sp_candidate in sps {
                     if response.sp_hash == response.message_signatures[0].0 {
                         found_sp_hash_debug = true;
@@ -83,6 +84,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                         self.constants,
                         &response.challenge_hash,
                         &response.sp_hash,
+                        peak_height,
                     ) {
                         if is_sp_signatures {
                             let (challenge_chain_sp, challenge_chain_sp_harv_sig) =

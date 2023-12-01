@@ -7,6 +7,7 @@ use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_clients::protocols::farmer::NewSignagePoint;
 use dg_xch_clients::protocols::harvester::{NewSignagePointHarvester, PoolDifficulty};
 use dg_xch_clients::websocket::{ChiaMessage, MessageHandler};
+use dg_xch_core::blockchain::proof_of_space::calculate_prefix_bits;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_core::consensus::pot_iterations::POOL_SUB_SLOT_ITERS;
@@ -67,6 +68,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             signage_point_index: sp.signage_point_index,
             sp_hash: sp.challenge_chain_sp,
             pool_difficulties,
+            filter_prefix_bits: calculate_prefix_bits(self.constants, sp.peak_height),
         });
         self.cache_time
             .lock()

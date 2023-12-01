@@ -95,7 +95,7 @@ impl Harvester for DruidGardenHarvester {
                     plot_counts.pool_total.fetch_add(1, Ordering::Relaxed);
                 }
                 if passes_plot_filter(
-                    constants_arc.as_ref(),
+                    data_arc.filter_prefix_bits,
                     &plot_id,
                     &data_arc.challenge_hash,
                     &data_arc.sp_hash,
