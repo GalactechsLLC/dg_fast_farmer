@@ -1,8 +1,9 @@
 use crate::farmer::config::{BladebitHarvesterConfig, Config, FarmingInfo, PoolWalletConfig};
 use clap::{Parser, Subcommand};
+use dg_xch_cli::wallet_commands::migrate_plot_nft;
 use dg_xch_cli::wallets::plotnft_utils::{get_plotnft_by_launcher_id, scrounge_for_plotnfts};
 use dg_xch_clients::rpc::full_node::FullnodeClient;
-use dg_xch_core::blockchain::sized_bytes::Bytes48;
+use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
 use dg_xch_keys::{
     key_from_mnemonic, master_sk_to_farmer_sk, master_sk_to_pool_sk,
@@ -51,6 +52,16 @@ pub enum Action {
         plot_directories: Option<Vec<String>>,
     },
     UpdatePoolInfo {},
+    JoinPool {
+        #[arg(short = 'u', long)]
+        pool_url: String,
+        #[arg(short = 'm', long)]
+        mnemonic: String,
+        #[arg(short = 'i', long)]
+        launcher_id: Option<String>,
+        #[arg(short = 'f', long)]
+        fee: Option<u64>,
+    },
 }
 impl Default for Action {
     fn default() -> Self {
@@ -266,4 +277,38 @@ pub async fn update_pool_info(config: Config) -> Result<Config, Error> {
     }
 
     Ok(updated_config)
+}
+
+pub async fn join_pool(
+    config: Config,
+    pool_url: String,
+    mnemonic: String,
+    launcher_id: Option<String>,
+    fee: Option<u64>,
+) -> Result<Config, Error> {
+    let launcher_id_bytes: Option<Bytes32> = launcher_id.map(|l| l.into());
+    let client = FullnodeClient::new(
+        &config.fullnode_rpc_host,
+        config.fullnode_rpc_port,
+        config.ssl_root_path.clone(),
+        &None,
+    );
+    for farmer_info in &config.farmer_info {
+        let launcher_id = farmer_info.launcher_id.unwrap();
+        if let Some(selected_launcher_id) = launcher_id_bytes {
+            if selected_launcher_id != launcher_id {
+                continue;
+            }
+        }
+        migrate_plot_nft(
+            &client,
+            &pool_url,
+            &launcher_id,
+            &mnemonic,
+            fee.unwrap_or_default(),
+        )
+        .await?;
+    }
+
+    update_pool_info(config).await
 }

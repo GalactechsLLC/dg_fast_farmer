@@ -1,4 +1,6 @@
-use crate::cli::{generate_config_from_mnemonic, update_pool_info, Action, Cli, GenerateConfig};
+use crate::cli::{
+    generate_config_from_mnemonic, join_pool, update_pool_info, Action, Cli, GenerateConfig,
+};
 use crate::farmer::config::{load_keys, Config};
 use crate::farmer::{Farmer, FarmerSharedState};
 use crate::tasks::pool_state_updater::pool_updater;
@@ -208,6 +210,31 @@ async fn main() -> Result<(), Error> {
                 .unwrap_or_default();
             let config = Config::try_from(&config_path).unwrap_or_default();
             let updated_config = update_pool_info(config).await?;
+            updated_config.save_as_yaml(config_path)?;
+
+            Ok(())
+        }
+        Action::JoinPool {
+            pool_url,
+            mnemonic,
+            launcher_id,
+            fee,
+        } => {
+            if !config_path.exists() {
+                eprintln!(
+                    "Failed to find config at {:?}, please run init",
+                    config_path
+                );
+                return Ok(());
+            }
+            SimpleLogger::new()
+                .with_colors(true)
+                .with_level(LevelFilter::Info)
+                .env()
+                .init()
+                .unwrap_or_default();
+            let config = Config::try_from(&config_path).unwrap_or_default();
+            let updated_config = join_pool(config, pool_url, mnemonic, launcher_id, fee).await?;
             updated_config.save_as_yaml(config_path)?;
 
             Ok(())
