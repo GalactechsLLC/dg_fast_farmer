@@ -143,7 +143,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
         sleep(Duration::from_secs(3)).await;
         system.refresh_system();
         loop {
-            let (sys, sys_info) = match spawn_blocking(move || {
+            let sys_info_res = spawn_blocking(move || {
                 system.refresh_cpu();
                 system.refresh_memory();
                 let si = SysInfo {
@@ -155,8 +155,8 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
                 };
                 (system, si)
             })
-            .await
-            {
+            .await;
+            let (sys, sys_info) = match sys_info_res {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Error Joining System Loading Thread: {:?}", e);
