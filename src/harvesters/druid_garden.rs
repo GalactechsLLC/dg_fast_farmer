@@ -1,10 +1,7 @@
 use crate::farmer::{PathInfo, PlotInfo};
-use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
+use crate::harvesters::{FarmingKeys, Harvester, ProofHandler, SignatureHandler};
 use async_trait::async_trait;
 use blst::min_pk::{PublicKey, SecretKey};
-use dg_xch_clients::protocols::harvester::{
-    NewProofOfSpace, NewSignagePointHarvester, RequestSignatures, RespondSignatures,
-};
 use dg_xch_core::blockchain::proof_of_space::{
     calculate_pos_challenge, generate_plot_public_key, passes_plot_filter, ProofBytes, ProofOfSpace,
 };
@@ -15,6 +12,9 @@ use dg_xch_core::consensus::pot_iterations::{
     calculate_iterations_quality, calculate_sp_interval_iters,
 };
 use dg_xch_core::plots::PlotHeader;
+use dg_xch_core::protocols::harvester::{
+    NewProofOfSpace, NewSignagePointHarvester, RequestSignatures, RespondSignatures,
+};
 use dg_xch_keys::master_sk_to_local_sk;
 use dg_xch_pos::plots::decompressor::DecompressorPool;
 use dg_xch_pos::plots::disk_plot::DiskPlot;
@@ -25,6 +25,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{StreamExt, TryStreamExt};
 use hex::encode;
 use log::{debug, error, info, warn};
+use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -34,16 +35,15 @@ use std::thread::available_parallelism;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 #[derive(Default)]
-struct PlotCounts {
-    og_passed: Arc<AtomicUsize>,
-    og_total: Arc<AtomicUsize>,
-    pool_total: Arc<AtomicUsize>,
-    pool_passed: Arc<AtomicUsize>,
-    compressed_passed: Arc<AtomicUsize>,
-    compressed_total: Arc<AtomicUsize>,
+pub struct PlotCounts {
+    pub og_passed: Arc<AtomicUsize>,
+    pub og_total: Arc<AtomicUsize>,
+    pub pool_total: Arc<AtomicUsize>,
+    pub pool_passed: Arc<AtomicUsize>,
+    pub compressed_passed: Arc<AtomicUsize>,
+    pub compressed_total: Arc<AtomicUsize>,
 }
 
 pub struct DruidGardenHarvester {
@@ -51,11 +51,10 @@ pub struct DruidGardenHarvester {
     pub plot_dirs: Arc<Vec<PathBuf>>,
     pub decompressor_pool: Arc<DecompressorPool>,
     pub plots_ready: Arc<AtomicBool>,
-    pub farmer_public_keys: Arc<Vec<Bytes48>>,
-    pub pool_public_keys: Arc<Vec<Bytes48>>,
-    pub pool_contract_hashes: Arc<Vec<Bytes32>>,
+    pub farming_keys: Arc<FarmingKeys>,
     pub selected_network: String,
-    pub uuid: Uuid,
+    pub uuid: Bytes32,
+    pub client_id: Bytes32,
 }
 #[async_trait]
 impl Harvester for DruidGardenHarvester {
@@ -78,7 +77,8 @@ impl Harvester for DruidGardenHarvester {
         let mut jobs = FuturesUnordered::new();
         self.plots.lock().await.iter().map(|(path_info, plot_info)|{
             (path_info.clone(), plot_info.clone())
-        }).for_each(|(path, plot_info)| { let data_arc = harvester_point.clone();
+        }).for_each(|(path, plot_info)| {
+            let data_arc = harvester_point.clone();
             let constants_arc = constants.clone();
             let plot_counts = plot_counts.clone();
             let mut responses = vec![];
@@ -86,6 +86,12 @@ impl Harvester for DruidGardenHarvester {
                 let (plot_id, k, memo, c_level) = match plot_info.reader.header() {
                     PlotHeader::V1(h) => (h.id, h.k, h.memo, 0),
                     PlotHeader::V2(h) => (h.id, h.k, h.memo, h.compression_level),
+                    PlotHeader::GHv2_5(_) => {
+                        return Err(Error::new(
+                            ErrorKind::InvalidInput,
+                            "Use the Gigahorse FastFarmer to Farm Gigahorse Plots",
+                        ));
+                    }
                 };
                 if plot_info.pool_public_key.is_some(){
                     plot_counts.og_total.fetch_add(1, Ordering::Relaxed);
@@ -155,7 +161,6 @@ impl Harvester for DruidGardenHarvester {
                                 calculate_sp_interval_iters(&constants_arc, sub_slot_iters)
                             {
                                 if required_iters < sp_interval_iters {
-                                    info!("Plot: {}, Passed Required Iterations, Loading Index: {}", path.file_name, index);
                                     match plot_info.reader.fetch_ordered_proof(index).await {
                                         Ok(proof) => {
                                             let proof_bytes = proof_to_bytes(&proof);
@@ -217,6 +222,9 @@ impl Harvester for DruidGardenHarvester {
                                             + path.file_name.as_str(),
                                         proof,
                                         signage_point_index: harvester_point.signage_point_index,
+                                        include_source_signature_data: false,
+                                        farmer_reward_address_override: None,
+                                        fee_info: None,
                                     })
                                     .await
                                 {
@@ -274,7 +282,7 @@ impl Harvester for DruidGardenHarvester {
             file_name: file_name.to_string(),
         }) {
             None => {
-                debug!("Failed to find plot info for plot: {}", file_name);
+                error!("Failed to find plot info for plot: {}", file_name);
                 return Err(Error::new(
                     ErrorKind::NotFound,
                     format!("Failed to find plot info for plot: {}", file_name),
@@ -283,6 +291,15 @@ impl Harvester for DruidGardenHarvester {
             Some(info) => match info.reader.header() {
                 PlotHeader::V1(h) => h.memo,
                 PlotHeader::V2(h) => h.memo,
+                PlotHeader::GHv2_5(_) => {
+                    return Err(Error::new(
+                        ErrorKind::InvalidInput,
+                        format!(
+                            "Use the Gigahorse FastFarmer to Farm Gigahorse Plots: {}",
+                            file_name
+                        ),
+                    ));
+                }
             },
         };
         let local_master_secret = SecretKey::from_bytes(memo.local_master_secret_key.as_ref())
@@ -297,7 +314,8 @@ impl Harvester for DruidGardenHarvester {
         let mut message_signatures = vec![];
         for msg in request_signatures.messages {
             let sig = sign_prepend(&local_sk, msg.as_ref(), &agg_pk);
-            message_signatures.push((msg, sig.to_bytes().into()));
+            let sig_bytes = sig.to_bytes().into();
+            message_signatures.push((msg, sig_bytes));
         }
         response_handle
             .handle_signature(RespondSignatures {
@@ -307,11 +325,13 @@ impl Harvester for DruidGardenHarvester {
                 local_pk: local_sk.sk_to_pk().to_bytes().into(),
                 farmer_pk: memo.farmer_public_key,
                 message_signatures,
+                include_source_signature_data: false,
+                farmer_reward_address_override: None,
             })
             .await
     }
 
-    fn uuid(&self) -> Uuid {
+    fn uuid(&self) -> Bytes32 {
         self.uuid
     }
 }
@@ -319,11 +339,10 @@ impl Harvester for DruidGardenHarvester {
 impl DruidGardenHarvester {
     pub async fn new(
         plot_dirs: Vec<PathBuf>,
-        farmer_public_keys: Vec<Bytes48>,
-        pool_public_keys: Vec<Bytes48>,
-        pool_contract_hashes: Vec<Bytes32>,
+        farming_keys: Arc<FarmingKeys>,
         shutdown_signal: Arc<AtomicBool>,
         selected_network: &str,
+        client_id: Bytes32,
     ) -> Result<Self, Error> {
         let decompressor_pool = Arc::new(DecompressorPool::new(
             1,
@@ -333,23 +352,17 @@ impl DruidGardenHarvester {
         let plots = Arc::new(Mutex::new(
             load_plots(
                 plot_dirs.clone(),
-                &farmer_public_keys,
-                &pool_public_keys,
-                &pool_contract_hashes,
+                &farming_keys.farmer_public_keys,
+                &farming_keys.pool_public_keys,
+                &farming_keys.pool_contract_hashes,
                 vec![],
                 decompressor_pool.clone(),
             )
             .await?,
         ));
-
-        let farmer_public_keys = Arc::new(farmer_public_keys);
-        let pool_public_keys = Arc::new(pool_public_keys);
-        let pool_contract_hashes = Arc::new(pool_contract_hashes);
         let plot_sync_mutex = plots.clone();
         let plot_sync_dirs = plot_dirs.clone();
-        let plot_sync_farmer_public_keys = farmer_public_keys.clone();
-        let plot_sync_pool_public_keys = pool_public_keys.clone();
-        let plot_sync_pool_contract_hashes = pool_contract_hashes.clone();
+        let plot_sync_farming_keys = farming_keys.clone();
         let plot_sync_decompressor_pool = decompressor_pool.clone();
         let _plot_sync = tokio::spawn(async move {
             let mut last_sync = Instant::now();
@@ -368,9 +381,9 @@ impl DruidGardenHarvester {
                     );
                     match load_plots(
                         plot_sync_dirs.clone(),
-                        &plot_sync_farmer_public_keys,
-                        &plot_sync_pool_public_keys,
-                        &plot_sync_pool_contract_hashes,
+                        &plot_sync_farming_keys.farmer_public_keys,
+                        &plot_sync_farming_keys.pool_public_keys,
+                        &plot_sync_farming_keys.pool_contract_hashes,
                         existing_plot_paths.as_ref().clone(),
                         plot_sync_decompressor_pool.clone(),
                     )
@@ -389,15 +402,14 @@ impl DruidGardenHarvester {
             }
         });
         Ok(Self {
-            farmer_public_keys,
-            pool_public_keys,
-            pool_contract_hashes,
+            farming_keys,
             plot_dirs,
             plots,
             plots_ready: Default::default(),
             decompressor_pool,
             selected_network: selected_network.to_string(),
-            uuid: Uuid::new_v4(),
+            client_id,
+            uuid: Bytes32::from(random::<[u8; 32]>()),
         })
     }
 }
@@ -621,6 +633,12 @@ async fn load_headers(
     let memo = match &header {
         PlotHeader::V1(header) => &header.memo,
         PlotHeader::V2(header) => &header.memo,
+        PlotHeader::GHv2_5(_) => {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Use the Gigahorse FastFarmer to Farm Gigahorse Plots",
+            ))
+        }
     };
     if let Some(key) = &memo.pool_public_key {
         if !pool_public_keys.contains(key) {

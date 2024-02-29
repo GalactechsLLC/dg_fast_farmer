@@ -24,12 +24,17 @@ Running
 
 To generate the farmer config:
 ```
-ff init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_PORT -n SELECTED_NETWORK
+ff init -f FULLNODE_HOST -p FULLNODE_PORT -n SELECTED_NETWORK
 ```
 
 To use a separate Fullnode for RPC calls during setup:
 ```
-ff init -m "MNEMONIC" -f FULLNODE_HOST -p FULLNODE_PORT -r FULLNODE_RPC_HOST -o FULLNODE_RPC_PORT -n SELECTED_NETWORK
+ff init -f FULLNODE_HOST -p FULLNODE_PORT -r FULLNODE_RPC_HOST -o FULLNODE_RPC_PORT -n SELECTED_NETWORK
+```
+
+For Wallets with lots of transactions, the init call runs much faster when targeting a launcher_id with -l:
+```
+ff init -f FULLNODE_HOST -p FULLNODE_PORT -r FULLNODE_RPC_HOST -o FULLNODE_RPC_PORT -n SELECTED_NETWORK -l LAUNCHER_ID
 ```
 
 To run the Farmer with TUI Interface(Default):
@@ -41,3 +46,17 @@ To run the Farmer in CLI mode:
 ```
 ff run
 ```
+
+To Update the PlotNFTs in the Config:
+```
+ff update-pool-info 
+```
+
+To Migrate the PlotNFTs in the config:
+```
+ff join-pool --pool-url <POOL_URL> --mnemonic <MNEMONIC> --launcher-id <LAUNCHER_ID> --fee <FEE>
+```
+
+> [!TIP]
+> To Print all available commands ```ff --help``` <br>
+> To Print Command Help ```ff <COMMAND> --help```

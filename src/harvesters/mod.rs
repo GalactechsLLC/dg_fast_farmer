@@ -1,19 +1,22 @@
 pub mod druid_garden;
 
-use crate::farmer::FarmerSharedState;
+use crate::cli::get_ssl_root_path;
+use crate::farmer::ExtendedFarmerSharedState;
 use crate::harvesters::druid_garden::DruidGardenHarvester;
 use async_trait::async_trait;
 use blst::min_pk::SecretKey;
-use dg_xch_clients::protocols::harvester::{
+use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48, SizedBytes};
+use dg_xch_core::protocols::farmer::FarmerSharedState;
+use dg_xch_core::protocols::harvester::{
     NewProofOfSpace, NewSignagePointHarvester, RequestSignatures, RespondSignatures,
 };
-use dg_xch_core::blockchain::sized_bytes::Bytes32;
+use dg_xch_core::ssl::create_all_ssl;
+use dg_xch_serialize::hash_256;
 use log::error;
 use std::collections::HashMap;
 use std::io::Error;
 use std::path::Path;
 use std::sync::Arc;
-use uuid::Uuid;
 
 #[async_trait]
 pub trait SignatureHandler {
@@ -27,34 +30,41 @@ pub trait ProofHandler {
 
 #[async_trait]
 pub trait Harvester {
-    async fn new_signage_point<T>(
+    async fn new_signage_point<T: 'static>(
         &self,
         signage_point: Arc<NewSignagePointHarvester>,
         proof_handle: T,
     ) -> Result<(), Error>
     where
         T: ProofHandler + Sync + Send;
-    async fn request_signatures<T>(
+    async fn request_signatures<T: 'static>(
         &self,
         request_signatures: RequestSignatures,
         response_handle: T,
     ) -> Result<(), Error>
     where
         T: SignatureHandler + Sync + Send;
-    fn uuid(&self) -> Uuid;
+    fn uuid(&self) -> Bytes32;
 }
 
 pub enum Harvesters {
     DruidGarden(DruidGardenHarvester),
 }
 
+pub struct FarmingKeys {
+    farmer_public_keys: Vec<Bytes48>,
+    pool_public_keys: Vec<Bytes48>,
+    pool_contract_hashes: Vec<Bytes32>,
+}
+
 pub async fn load_harvesters(
-    shared_state: Arc<FarmerSharedState>,
-) -> Result<Arc<HashMap<Uuid, Arc<Harvesters>>>, Error> {
-    let mut harvesters: HashMap<Uuid, Arc<Harvesters>> = HashMap::new();
+    shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+) -> Result<Arc<HashMap<Bytes32, Arc<Harvesters>>>, Error> {
+    let mut harvesters: HashMap<Bytes32, Arc<Harvesters>> = HashMap::new();
     let mut farmer_public_keys = vec![];
     let mut pool_public_keys = vec![];
-    for farmer_info in &shared_state.config.farmer_info {
+    let client_id = load_client_id(shared_state.as_ref()).await?;
+    for farmer_info in &shared_state.data.config.farmer_info {
         let f_sk: SecretKey = farmer_info.farmer_secret_key.into();
         farmer_public_keys.push(f_sk.sk_to_pk().to_bytes().into());
         if let Some(pk) = farmer_info.pool_secret_key {
@@ -62,8 +72,9 @@ pub async fn load_harvesters(
             pool_public_keys.push(p_sk.sk_to_pk().to_bytes().into());
         }
     }
-    shared_state.gui_stats.lock().await.keys = farmer_public_keys.clone();
+    shared_state.data.gui_stats.lock().await.keys = farmer_public_keys.clone();
     let pool_contract_hashes = shared_state
+        .data
         .config
         .pool_info
         .iter()
@@ -71,23 +82,27 @@ pub async fn load_harvesters(
         .collect::<Vec<Bytes32>>();
     let mut sum = 0;
     let mut total_size = 0;
-    if let Some(bb_config) = &shared_state.config.harvester_configs.bladebit {
-        for dir in &bb_config.plot_directories {
+    let farming_keys = Arc::new(FarmingKeys {
+        farmer_public_keys,
+        pool_public_keys,
+        pool_contract_hashes,
+    });
+    if let Some(config) = &shared_state.data.config.harvester_configs.druid_garden {
+        for dir in &config.plot_directories {
             if let Err(e) = count_plots(Path::new(&dir), &mut sum, &mut total_size).await {
                 error!("Error Counting Plots: {e:?}")
             }
         }
         let harvester = DruidGardenHarvester::new(
-            bb_config
+            config
                 .plot_directories
                 .iter()
                 .map(|s| Path::new(s).to_path_buf())
                 .collect(),
-            farmer_public_keys,
-            pool_public_keys,
-            pool_contract_hashes,
-            shared_state.run.clone(),
-            &shared_state.config.selected_network,
+            farming_keys.clone(),
+            shared_state.data.run.clone(),
+            &shared_state.data.config.selected_network,
+            client_id,
         )
         .await?;
         harvesters.insert(
@@ -95,8 +110,8 @@ pub async fn load_harvesters(
             Arc::new(Harvesters::DruidGarden(harvester)),
         );
     }
-    shared_state.gui_stats.lock().await.total_plot_count = sum;
-    shared_state.gui_stats.lock().await.total_plot_space = total_size;
+    shared_state.data.gui_stats.lock().await.total_plot_count = sum;
+    shared_state.data.gui_stats.lock().await.total_plot_space = total_size;
     Ok(Arc::new(harvesters))
 }
 
@@ -119,4 +134,18 @@ async fn count_plots(
         }
     }
     Ok(())
+}
+
+static HARVESTER_CRT: &str = "harvester/private_harvester.crt";
+
+async fn load_client_id(
+    shared_state: &FarmerSharedState<ExtendedFarmerSharedState>,
+) -> Result<Bytes32, Error> {
+    let root_path = get_ssl_root_path(shared_state);
+    let ssl_path = root_path.join(Path::new(HARVESTER_CRT));
+    if !ssl_path.exists() {
+        create_all_ssl(&root_path, false)?;
+    }
+    let cert = tokio::fs::read_to_string(ssl_path).await?;
+    Ok(Bytes32::new(&hash_256(cert)))
 }
