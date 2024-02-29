@@ -1,17 +1,18 @@
-use crate::farmer::FarmerSharedState;
+use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvesters, SignatureHandler};
 use async_trait::async_trait;
 use blst::min_pk::AggregateSignature;
 use blst::BLST_ERROR;
 use dg_xch_clients::api::pool::PoolClient;
-use dg_xch_clients::protocols::farmer::{DeclareProofOfSpace, SignedValues};
-use dg_xch_clients::protocols::harvester::RespondSignatures;
-use dg_xch_clients::protocols::ProtocolMessageTypes;
-use dg_xch_clients::websocket::{ChiaMessage, Websocket};
 use dg_xch_core::blockchain::pool_target::PoolTarget;
 use dg_xch_core::blockchain::proof_of_space::{generate_plot_public_key, generate_taproot_sk};
+use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes96};
 use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
 use dg_xch_core::consensus::constants::ConsensusConstants;
+use dg_xch_core::protocols::farmer::{DeclareProofOfSpace, SignedValues};
+use dg_xch_core::protocols::harvester::RespondSignatures;
+use dg_xch_core::protocols::{ChiaMessage, ProtocolMessageTypes};
+use dg_xch_keys::decode_puzzle_hash;
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
@@ -19,18 +20,17 @@ use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite::Message;
-use uuid::Uuid;
 
 pub struct RespondSignaturesHandler<T: PoolClient + Sized + Sync + Send + 'static> {
     pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState>,
-    pub harvester_id: Uuid,
-    pub harvesters: Arc<HashMap<Uuid, Arc<Harvesters>>>,
+    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+    pub harvester_id: Bytes32,
+    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
     pub constants: &'static ConsensusConstants,
 }
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
-    for RespondSignaturesHandler<T>
+for RespondSignaturesHandler<T>
 {
     async fn handle_signature(&self, response: RespondSignatures) -> Result<(), Error> {
         if let Some(sps) = self
@@ -51,15 +51,20 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                 let mut found_sp_hash_debug = false;
                 let peak_height = sps[0].peak_height;
                 for sp_candidate in sps {
-                    if response.sp_hash == response.message_signatures[0].0 {
+                    if Some(response.sp_hash) == response.message_signatures.first().map(|v| v.0) {
                         found_sp_hash_debug = true;
-                        if sp_candidate.reward_chain_sp == response.message_signatures[1].0 {
+                        if Some(sp_candidate.reward_chain_sp)
+                            == response.message_signatures.get(1).map(|v| v.0)
+                        {
                             is_sp_signatures = true;
                         }
                     }
                 }
-                if found_sp_hash_debug {
-                    assert!(is_sp_signatures);
+                if found_sp_hash_debug && !is_sp_signatures {
+                    return Err(Error::new(
+                        ErrorKind::InvalidInput,
+                        "Found SP Hash Debug, but missing reward_chain_sp signature",
+                    ));
                 }
                 let mut pospace = None;
                 {
@@ -208,7 +213,9 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         {
                                             let pool_target = PoolTarget {
                                                 max_height: 0,
-                                                puzzle_hash: *self.shared_state.pool_target,
+                                                puzzle_hash: decode_puzzle_hash(
+                                                    &self.shared_state.data.config.payout_address,
+                                                )?,
                                             };
                                             let pool_target_signature =
                                                 sign(sk, &pool_target.to_bytes());
@@ -234,16 +241,35 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                             .to_signature()
                                             .to_bytes()
                                             .into(),
-                                        farmer_puzzle_hash: *self.shared_state.farmer_target,
+                                        farmer_puzzle_hash: if let Some(
+                                            farmer_reward_address_override,
+                                        ) =
+                                            response.farmer_reward_address_override
+                                        {
+                                            farmer_reward_address_override
+                                        } else {
+                                            decode_puzzle_hash(
+                                                &self.shared_state.data.config.payout_address,
+                                            )?
+                                        },
                                         pool_target,
                                         pool_signature: pool_target_signature
                                             .map(|s| s.to_bytes().into()),
+                                        include_signature_source_data: response
+                                            .include_source_signature_data
+                                            || response.farmer_reward_address_override.is_some(),
                                     };
-                                    if let Some(client) =
-                                        self.shared_state.full_node_client.lock().await.as_mut()
+                                    if let Some(client) = self
+                                        .shared_state
+                                        .data
+                                        .full_node_client
+                                        .lock()
+                                        .await
+                                        .as_mut()
                                     {
                                         let _ = client
                                             .client
+                                            .connection
                                             .lock()
                                             .await
                                             .send(Message::Binary(
@@ -252,10 +278,17 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(),
+                                                    .to_bytes(),
                                             ))
                                             .await;
-                                        info!("Declaring Proof of Space: {:?}", request);
+                                        debug!("Declaring Proof of Space: {:?}", request);
+                                        let top = format!("{:🌱<1$}", "", 43);
+                                        let mid = format!(
+                                            "{:🌱^1$}",
+                                            "  Declaring New Proof of Space  ", 56
+                                        );
+                                        let bottom = format!("{:🌱<1$}", "", 43);
+                                        info!("\n{top}\n{mid}\n{bottom}")
                                     } else {
                                         error!(
                                             "Failed to declare Proof of Space: {:?} No Client",
@@ -320,8 +353,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                     let foliage_agg_sig =
                                         AggregateSignature::aggregate(&foliage_sigs_to_agg, true)
                                             .map_err(|e| {
-                                            Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
-                                        })?;
+                                                Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
+                                            })?;
 
                                     let foliage_block_sigs_to_agg =
                                         if let Some(foliage_transaction_block_sig_taproot) =
@@ -342,9 +375,9 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         &foliage_block_sigs_to_agg,
                                         true,
                                     )
-                                    .map_err(|e| {
-                                        Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
-                                    })?;
+                                        .map_err(|e| {
+                                            Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
+                                        })?;
                                     if foliage_agg_sig.to_signature().verify(
                                         true,
                                         foliage_block_data_hash.as_ref(),
@@ -355,10 +388,10 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                     ) != BLST_ERROR::BLST_SUCCESS
                                     {
                                         warn!(
-                                            "Failed to validate foliage signature {:?}",
-                                            foliage_agg_sig.to_signature()
+                                            "Failed to validate foliage signature {:?}, Taproot Included: {include_taproot}, ",
+                                            Bytes96::from(foliage_agg_sig.to_signature())
                                         );
-                                        return Ok(());
+                                        //return Ok(());
                                     }
                                     if foliage_block_agg_sig.to_signature().verify(
                                         true,
@@ -370,10 +403,10 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                     ) != BLST_ERROR::BLST_SUCCESS
                                     {
                                         warn!(
-                                            "Failed to validate foliage_block signature {:?}",
-                                            foliage_block_agg_sig.to_signature()
+                                            "Failed to validate foliage_block signature {:?}, Taproot Included: {include_taproot}, ",
+                                            Bytes96::from(foliage_block_agg_sig.to_signature())
                                         );
-                                        return Ok(());
+                                        //return Ok(());
                                     }
                                     let request = SignedValues {
                                         quality_string: computed_quality_string,
@@ -387,11 +420,17 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                             .into(),
                                     };
 
-                                    if let Some(client) =
-                                        self.shared_state.full_node_client.lock().await.as_mut()
+                                    if let Some(client) = self
+                                        .shared_state
+                                        .data
+                                        .full_node_client
+                                        .lock()
+                                        .await
+                                        .as_mut()
                                     {
                                         let _ = client
                                             .client
+                                            .connection
                                             .lock()
                                             .await
                                             .send(Message::Binary(
@@ -400,10 +439,10 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(),
+                                                    .to_bytes(),
                                             ))
                                             .await;
-                                        info!("Sending Signed Values: {:?}", request);
+                                        debug!("Sending Signed Values: {:?}", request);
                                     } else {
                                         error!(
                                             "Failed to Sending Signed Values: {:?} No Client",
@@ -413,7 +452,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                 }
                             }
                         } else {
-                            debug!("Detected Partial or PoSpace {:?}", pospace);
+                            warn!("No Signatures Received for {:?}", pospace);
                             return Ok(());
                         }
                     } else {
@@ -421,7 +460,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                         return Ok(());
                     }
                 } else {
-                    debug!("Failed to find Proof for {}", &response.sp_hash);
+                    warn!("Failed to find Proof for {}", &response.sp_hash);
                     return Ok(());
                 }
             }

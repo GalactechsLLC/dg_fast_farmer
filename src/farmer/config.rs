@@ -1,5 +1,6 @@
 use blst::min_pk::SecretKey;
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
+use dg_xch_core::config::PoolWalletConfig;
 use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
 use dg_xch_keys::decode_puzzle_hash;
 use std::collections::HashMap;
@@ -18,23 +19,13 @@ pub struct FarmingInfo {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PoolWalletConfig {
-    pub launcher_id: Bytes32,
-    pub pool_url: String,
-    pub difficulty: Option<u64>,
-    pub target_puzzle_hash: Bytes32,
-    pub p2_singleton_puzzle_hash: Bytes32,
-    pub owner_public_key: Bytes48,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct BladebitHarvesterConfig {
+pub struct DruidGardenHarvesterConfig {
     pub plot_directories: Vec<String>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HarvesterConfig {
-    pub bladebit: Option<BladebitHarvesterConfig>,
+    pub druid_garden: Option<DruidGardenHarvesterConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -69,10 +60,10 @@ impl Config {
             && !self.farmer_info.is_empty()
             && decode_puzzle_hash(&self.payout_address).is_ok()
             && self.pool_info.iter().all(|c| {
-                self.farmer_info
-                    .iter()
-                    .any(|f| f.launcher_id == Some(c.launcher_id))
-            })
+            self.farmer_info
+                .iter()
+                .any(|f| f.launcher_id == Some(c.launcher_id))
+        })
     }
 }
 
@@ -89,7 +80,7 @@ impl Default for Config {
             pool_info: vec![],
             payout_address: "".to_string(),
             harvester_configs: HarvesterConfig {
-                bladebit: Some(BladebitHarvesterConfig {
+                druid_garden: Some(DruidGardenHarvesterConfig {
                     plot_directories: vec![],
                 }),
             },

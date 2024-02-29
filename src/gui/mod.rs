@@ -4,6 +4,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::Error;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,16 +15,17 @@ use ratatui::{prelude::*, widgets::*};
 use tui_logger::*;
 
 use crate::farmer::config::{load_keys, Config};
-use crate::farmer::{Farmer, FarmerSharedState, GuiStats};
+use crate::farmer::{ExtendedFarmerSharedState, Farmer, GuiStats};
 use crate::tasks::pool_state_updater::pool_updater;
 use chrono::prelude::*;
 use dg_xch_clients::api::full_node::FullnodeAPI;
 use dg_xch_clients::api::pool::DefaultPoolClient;
 use dg_xch_clients::rpc::full_node::FullnodeClient;
+use dg_xch_clients::ClientSSLConfig;
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
-use dg_xch_keys::decode_puzzle_hash;
+use dg_xch_core::protocols::farmer::FarmerSharedState;
 use log::{error, LevelFilter};
-use sysinfo::{CpuExt, System, SystemExt};
+use sysinfo::System;
 use tokio::join;
 use tokio::sync::Mutex;
 use tokio::task::{spawn_blocking, JoinHandle};
@@ -47,12 +49,12 @@ struct SysInfo {
 
 struct GuiState {
     system_info: Arc<Mutex<SysInfo>>,
-    farmer_state: Arc<FarmerSharedState>,
+    farmer_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
     fullnode_state: Arc<Mutex<Option<FullNodeState>>>,
 }
 
 impl GuiState {
-    fn new(shared_state: Arc<FarmerSharedState>) -> GuiState {
+    fn new(shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>) -> GuiState {
         GuiState {
             system_info: Default::default(),
             farmer_state: shared_state,
@@ -72,18 +74,16 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
     enable_raw_mode()?;
     let (farmer_private_keys, owner_secret_keys, auth_secret_keys, pool_public_keys) =
         load_keys(config.clone()).await;
-    let farmer_target_encoded = &config.payout_address;
-    let farmer_target = decode_puzzle_hash(farmer_target_encoded)?;
-    let pool_target = decode_puzzle_hash(farmer_target_encoded)?;
     let shared_state = Arc::new(FarmerSharedState {
-        config: config.clone(),
-        run: Arc::new(AtomicBool::new(true)),
         farmer_private_keys: Arc::new(farmer_private_keys),
         owner_secret_keys: Arc::new(owner_secret_keys),
         auth_secret_keys: Arc::new(auth_secret_keys),
         pool_public_keys: Arc::new(pool_public_keys),
-        farmer_target: Arc::new(farmer_target),
-        pool_target: Arc::new(pool_target),
+        data: Arc::new(ExtendedFarmerSharedState {
+            config: config.clone(),
+            run: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        }),
         ..Default::default()
     });
     let mut stdout = std::io::stdout();
@@ -111,7 +111,21 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
         let full_node_rpc = FullnodeClient::new(
             &config.fullnode_rpc_host,
             config.fullnode_rpc_port,
-            config.ssl_root_path.clone(),
+            60,
+            config.ssl_root_path.clone().map(|s| ClientSSLConfig {
+                ssl_crt_path: Path::new(&s)
+                    .join("farmer/private_daemon.crt")
+                    .to_string_lossy()
+                    .to_string(),
+                ssl_key_path: Path::new(&s)
+                    .join("farmer/private_daemon.key")
+                    .to_string_lossy()
+                    .to_string(),
+                ssl_ca_crt_path: Path::new(&s)
+                    .join("ca/private_ca.crt")
+                    .to_string_lossy()
+                    .to_string(),
+            }),
             &None,
         );
         let mut last_update = Instant::now();
@@ -130,7 +144,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
                     }
                 }
             }
-            if !fullnode_state.farmer_state.run.load(Ordering::Relaxed) {
+            if !fullnode_state.farmer_state.data.run.load(Ordering::Relaxed) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -139,11 +153,13 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
     let sys_info_gui_state = gui_state.clone();
     let sys_info_thread = tokio::spawn(async move {
         let mut system = System::new();
-        system.refresh_system();
+        system.refresh_cpu();
+        system.refresh_memory();
         sleep(Duration::from_secs(3)).await;
-        system.refresh_system();
+        system.refresh_cpu();
+        system.refresh_memory();
         loop {
-            let (sys, sys_info) = match spawn_blocking(move || {
+            let results = spawn_blocking(move || {
                 system.refresh_cpu();
                 system.refresh_memory();
                 let si = SysInfo {
@@ -155,17 +171,19 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
                 };
                 (system, si)
             })
-            .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Error Joining System Loading Thread: {:?}", e);
-                    (System::new(), Default::default())
-                }
-            };
+                .await;
+            let (sys, sys_info) = results.unwrap_or_else(|e| {
+                error!("Error Joining System Loading Thread: {:?}", e);
+                (System::new(), Default::default())
+            });
             *sys_info_gui_state.system_info.lock().await = sys_info;
             system = sys;
-            if !sys_info_gui_state.farmer_state.run.load(Ordering::Relaxed) {
+            if !sys_info_gui_state
+                .farmer_state
+                .data
+                .run
+                .load(Ordering::Relaxed)
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -205,7 +223,7 @@ async fn run_gui<B: Backend>(
 ) -> std::io::Result<()> {
     loop {
         {
-            let farmer_state = gui_state.farmer_state.gui_stats.lock().await.clone();
+            let farmer_state = gui_state.farmer_state.data.gui_stats.lock().await.clone();
             let sys_info = *gui_state.system_info.lock().await;
             let fullnode_state = gui_state.fullnode_state.lock().await.clone();
             terminal.draw(|f| ui(f, farmer_state, fullnode_state, sys_info))?;
@@ -214,18 +232,26 @@ async fn run_gui<B: Backend>(
             if let Event::Key(event) = event::read()? {
                 match event.code {
                     KeyCode::Esc => {
-                        gui_state.farmer_state.run.store(false, Ordering::Relaxed);
+                        gui_state
+                            .farmer_state
+                            .data
+                            .run
+                            .store(false, Ordering::Relaxed);
                     }
                     KeyCode::Char('c') => {
                         if event.modifiers == KeyModifiers::CONTROL {
-                            gui_state.farmer_state.run.store(false, Ordering::Relaxed);
+                            gui_state
+                                .farmer_state
+                                .data
+                                .run
+                                .store(false, Ordering::Relaxed);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        if !gui_state.farmer_state.run.load(Ordering::Relaxed) {
+        if !gui_state.farmer_state.data.run.load(Ordering::Relaxed) {
             break;
         }
     }
@@ -263,7 +289,7 @@ fn ui(
                 Constraint::Percentage(9),
                 Constraint::Percentage(10),
             ]
-            .as_ref(),
+                .as_ref(),
         )
         .split(wrapper_chunks[0]);
 
