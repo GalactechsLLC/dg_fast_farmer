@@ -12,7 +12,7 @@ use dg_xch_core::protocols::pool::{
     PoolError, PoolErrorCode, PostFarmerPayload, PostFarmerRequest, PostFarmerResponse,
     PutFarmerPayload, PutFarmerRequest, PutFarmerResponse,
 };
-use dg_xch_keys::{parse_payout_address};
+use dg_xch_keys::parse_payout_address;
 use dg_xch_serialize::{hash_256, ChiaSerialize};
 use log::{debug, error, info, warn};
 use std::collections::hash_map::Entry;
@@ -45,7 +45,7 @@ pub async fn pool_updater(shared_state: Arc<FarmerSharedState<ExtendedFarmerShar
                 pool_client.clone(),
                 shared_state.data.config.clone(),
             )
-                .await;
+            .await;
             first = false;
             last_update = Instant::now();
             shared_state.data.gui_stats.lock().await.last_pool_update = SystemTime::now()
@@ -75,7 +75,7 @@ pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
         target_puzzle_hash: pool_config.target_puzzle_hash,
         authentication_token,
     }
-        .to_bytes();
+    .to_bytes();
     let to_sign = hash_256(&msg);
     let signature = sign(authentication_sk, &to_sign);
     if !verify_signature(&authentication_sk.sk_to_pk(), &to_sign, &signature) {
@@ -209,7 +209,7 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
         authentication_sk,
         client,
     )
-        .await?;
+    .await?;
     pool_states
         .lock()
         .await
@@ -271,7 +271,10 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
             owner_keys.get(&pool_config.owner_public_key),
             auth_keys.get(&pool_config.owner_public_key),
         ) {
-            info!("Adding Pool State for {}", pool_config.p2_singleton_puzzle_hash);
+            info!(
+                "Adding Pool State for {}",
+                pool_config.p2_singleton_puzzle_hash
+            );
             if let Entry::Vacant(s) = pool_states
                 .lock()
                 .await
@@ -323,7 +326,10 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     )
                 })
                 .next_pool_info_update;
-            info!("Updating Pool Info {}", pool_config.p2_singleton_puzzle_hash);
+            info!(
+                "Updating Pool Info {}",
+                pool_config.p2_singleton_puzzle_hash
+            );
             if Instant::now() >= next_pool_info_update {
                 //Makes a GET request to the pool to get the updated information
                 match client.get_pool_info(&pool_config.pool_url).await {
@@ -409,7 +415,10 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     )
                 })
                 .next_farmer_update;
-            info!("Updating Pool Info {}", pool_config.p2_singleton_puzzle_hash);
+            info!(
+                "Updating Pool Info {}",
+                pool_config.p2_singleton_puzzle_hash
+            );
             if Instant::now() >= next_farmer_update {
                 pool_states
                     .lock()
@@ -443,7 +452,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         auth_secret_key,
                         client.clone(),
                     )
-                        .await
+                    .await
                     {
                         Ok(resp) => Some(resp),
                         Err(e) => {
@@ -458,7 +467,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     pool_config.difficulty,
                                     client.clone(),
                                 )
-                                    .await
+                                .await
                                 {
                                     Ok(resp) => {
                                         info!(
@@ -477,7 +486,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     auth_secret_key,
                                     client.clone(),
                                 )
-                                    .await
+                                .await
                                 {
                                     Ok(resp) => Some(resp),
                                     Err(e) => {
@@ -499,7 +508,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     pool_config.difficulty,
                                     client.clone(),
                                 )
-                                    .await
+                                .await
                                 {
                                     Ok(res) => {
                                         info!("Farmer Update Response: {:?}", res);
@@ -510,8 +519,8 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                             auth_secret_key,
                                             client.clone(),
                                         )
-                                            .await
-                                            .ok()
+                                        .await
+                                        .ok()
                                     }
                                     Err(e) => {
                                         error!("Failed to update farmer auth key. {:?}", e);
@@ -588,7 +597,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     pool_config.difficulty,
                                     client.clone(),
                                 )
-                                    .await
+                                .await
                                 {
                                     Ok(res) => {
                                         if res.suggested_difficulty.is_some() {

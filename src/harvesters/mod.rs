@@ -35,15 +35,15 @@ pub trait Harvester {
         signage_point: Arc<NewSignagePointHarvester>,
         proof_handle: T,
     ) -> Result<(), Error>
-        where
-            T: ProofHandler + Sync + Send;
+    where
+        T: ProofHandler + Sync + Send;
     async fn request_signatures<T: 'static>(
         &self,
         request_signatures: RequestSignatures,
         response_handle: T,
     ) -> Result<(), Error>
-        where
-            T: SignatureHandler + Sync + Send;
+    where
+        T: SignatureHandler + Sync + Send;
     fn uuid(&self) -> Bytes32;
 }
 
@@ -104,7 +104,7 @@ pub async fn load_harvesters(
             &shared_state.data.config.selected_network,
             client_id,
         )
-            .await?;
+        .await?;
         harvesters.insert(
             harvester.uuid(),
             Arc::new(Harvesters::DruidGarden(harvester)),

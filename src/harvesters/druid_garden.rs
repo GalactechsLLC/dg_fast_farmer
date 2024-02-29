@@ -63,8 +63,8 @@ impl Harvester for DruidGardenHarvester {
         signage_point: Arc<NewSignagePointHarvester>,
         proof_handle: T,
     ) -> Result<(), Error>
-        where
-            T: ProofHandler + Sync + Send,
+    where
+        T: ProofHandler + Sync + Send,
     {
         let plot_counts = Arc::new(PlotCounts::default());
         let harvester_point = Arc::new(signage_point);
@@ -273,8 +273,8 @@ impl Harvester for DruidGardenHarvester {
         request_signatures: RequestSignatures,
         response_handle: T,
     ) -> Result<(), Error>
-        where
-            T: SignatureHandler + Sync + Send,
+    where
+        T: SignatureHandler + Sync + Send,
     {
         let file_name = request_signatures.plot_identifier.split_at(64).1;
         let memo = match self.plots.lock().await.get(&PathInfo {
@@ -294,7 +294,10 @@ impl Harvester for DruidGardenHarvester {
                 PlotHeader::GHv2_5(_) => {
                     return Err(Error::new(
                         ErrorKind::InvalidInput,
-                        format!("Use the Gigahorse FastFarmer to Farm Gigahorse Plots: {}", file_name),
+                        format!(
+                            "Use the Gigahorse FastFarmer to Farm Gigahorse Plots: {}",
+                            file_name
+                        ),
                     ));
                 }
             },
@@ -355,7 +358,7 @@ impl DruidGardenHarvester {
                 vec![],
                 decompressor_pool.clone(),
             )
-                .await?,
+            .await?,
         ));
         let plot_sync_mutex = plots.clone();
         let plot_sync_dirs = plot_dirs.clone();
@@ -384,7 +387,7 @@ impl DruidGardenHarvester {
                         existing_plot_paths.as_ref().clone(),
                         plot_sync_decompressor_pool.clone(),
                     )
-                        .await
+                    .await
                     {
                         Ok(plots) => {
                             plot_sync_mutex.lock().await.extend(plots);
@@ -454,7 +457,7 @@ async fn load_plots(
                         .collect::<Vec<&Path>>()
                         .as_slice(),
                 )
-                    .await
+                .await
                 {
                     Ok((headers, failed)) => {
                         debug!(
@@ -476,7 +479,7 @@ async fn load_plots(
                                 pool_public_keys.as_ref(),
                                 &pool_contract_hashes,
                             )
-                                .await
+                            .await
                             {
                                 Ok(headers) => headers,
                                 Err(e) => {
@@ -498,7 +501,7 @@ async fn load_plots(
                                 Some(decompressor_pool.clone()),
                                 Some(decompressor_pool.clone()),
                             )
-                                .await
+                            .await
                             {
                                 Ok(reader) => {
                                     let local_master_secret = local_master_secret_key.into();

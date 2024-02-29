@@ -2,6 +2,7 @@ use crate::farmer::config::{Config, DruidGardenHarvesterConfig, FarmingInfo};
 use crate::farmer::ExtendedFarmerSharedState;
 use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
+use dg_xch_cli::wallet_commands::migrate_plot_nft;
 use dg_xch_cli::wallets::plotnft_utils::{get_plotnft_by_launcher_id, scrounge_for_plotnfts};
 use dg_xch_clients::rpc::full_node::FullnodeClient;
 use dg_xch_clients::ClientSSLConfig;
@@ -26,7 +27,6 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use dg_xch_cli::wallet_commands::migrate_plot_nft;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -119,17 +119,17 @@ pub async fn generate_config_from_mnemonic(gen_settings: GenerateConfig) -> Resu
     if let Some(op) = &gen_settings.output_path {
         if op.exists()
             && !Confirm::new()
-            .with_prompt(format!(
-                "An existing config exists at {:?}, would you like to override it? (Y/N)",
-                op
-            ))
-            .interact()
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Interrupted,
-                    format!("Dialog Interrupted: {:?}", e),
-                )
-            })?
+                .with_prompt(format!(
+                    "An existing config exists at {:?}, would you like to override it? (Y/N)",
+                    op
+                ))
+                .interact()
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::Interrupted,
+                        format!("Dialog Interrupted: {:?}", e),
+                    )
+                })?
         {
             return Err(Error::new(ErrorKind::Interrupted, "User Canceled"));
         }
@@ -152,13 +152,14 @@ pub async fn generate_config_from_mnemonic(gen_settings: GenerateConfig) -> Resu
     });
     let master_key = key_from_mnemonic(&gen_settings.mnemonic)?;
     config.fullnode_ws_host = gen_settings
-        .fullnode_ws_host.clone()
+        .fullnode_ws_host
+        .clone()
         .unwrap_or(String::from("localhost"));
-    config.fullnode_rpc_host = gen_settings
-        .fullnode_rpc_host
-        .unwrap_or(gen_settings
+    config.fullnode_rpc_host = gen_settings.fullnode_rpc_host.unwrap_or(
+        gen_settings
             .fullnode_ws_host
-            .unwrap_or(String::from("localhost")));
+            .unwrap_or(String::from("localhost")),
+    );
     config.fullnode_ws_port = gen_settings.fullnode_ws_port.unwrap_or(8444);
     config.fullnode_rpc_port = gen_settings.fullnode_rpc_port.unwrap_or(8555);
     config.ssl_root_path = gen_settings.fullnode_ssl.clone();
@@ -370,12 +371,12 @@ pub fn load_mnemonic_from_file<P: AsRef<Path>>(path: P) -> Result<Mnemonic, Erro
         &fs::read_to_string(path)
             .map_err(|e| Error::new(e.kind(), format!("Failed to Mnemonic File: {e:?}")))?,
     )
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("Failed to parse Mnemonic: {e:?}"),
-            )
-        })
+    .map_err(|e| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            format!("Failed to parse Mnemonic: {e:?}"),
+        )
+    })
 }
 
 pub fn prompt_for_mnemonic() -> Result<Mnemonic, Error> {
@@ -397,12 +398,12 @@ pub fn prompt_for_mnemonic() -> Result<Mnemonic, Error> {
                 )
             })?,
     )
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("Failed to parse Mnemonic: {e:?}"),
-            )
-        })
+    .map_err(|e| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            format!("Failed to parse Mnemonic: {e:?}"),
+        )
+    })
 }
 
 pub async fn join_pool(

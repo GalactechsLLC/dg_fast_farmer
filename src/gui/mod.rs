@@ -159,7 +159,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
         system.refresh_cpu();
         system.refresh_memory();
         loop {
-            let results = spawn_blocking(move || {
+            let sys_info_res = spawn_blocking(move || {
                 system.refresh_cpu();
                 system.refresh_memory();
                 let si = SysInfo {
@@ -171,8 +171,8 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
                 };
                 (system, si)
             })
-                .await;
-            let (sys, sys_info) = results.unwrap_or_else(|e| {
+            .await;
+            let (sys, sys_info) = sys_info_res.unwrap_or_else(|e| {
                 error!("Error Joining System Loading Thread: {:?}", e);
                 (System::new(), Default::default())
             });
@@ -289,7 +289,7 @@ fn ui(
                 Constraint::Percentage(9),
                 Constraint::Percentage(10),
             ]
-                .as_ref(),
+            .as_ref(),
         )
         .split(wrapper_chunks[0]);
 

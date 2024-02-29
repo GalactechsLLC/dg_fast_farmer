@@ -26,7 +26,7 @@ pub struct RequestSignedValuesHandle<T: PoolClient + Sized + Sync + Send + 'stat
 }
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
-for RequestSignedValuesHandle<T>
+    for RequestSignedValuesHandle<T>
 {
     async fn handle(
         &self,

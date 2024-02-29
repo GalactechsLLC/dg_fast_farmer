@@ -1,4 +1,7 @@
-use crate::cli::{generate_config_from_mnemonic, get_config_path, load_mnemonic_from_file, prompt_for_mnemonic, update_pool_info, Action, Cli, GenerateConfig, join_pool};
+use crate::cli::{
+    generate_config_from_mnemonic, get_config_path, join_pool, load_mnemonic_from_file,
+    prompt_for_mnemonic, update_pool_info, Action, Cli, GenerateConfig,
+};
 use crate::farmer::config::{load_keys, Config};
 use crate::farmer::{ExtendedFarmerSharedState, Farmer};
 use crate::tasks::pool_state_updater::pool_updater;
@@ -185,7 +188,7 @@ async fn main() -> Result<(), Error> {
                 plot_directories,
                 additional_headers: None,
             })
-                .await?;
+            .await?;
             Ok(())
         }
         Action::UpdatePoolInfo {} => {

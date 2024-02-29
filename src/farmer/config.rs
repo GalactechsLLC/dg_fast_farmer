@@ -60,10 +60,10 @@ impl Config {
             && !self.farmer_info.is_empty()
             && decode_puzzle_hash(&self.payout_address).is_ok()
             && self.pool_info.iter().all(|c| {
-            self.farmer_info
-                .iter()
-                .any(|f| f.launcher_id == Some(c.launcher_id))
-        })
+                self.farmer_info
+                    .iter()
+                    .any(|f| f.launcher_id == Some(c.launcher_id))
+            })
     }
 }
 

@@ -398,7 +398,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                     &[&sig_farmer, &response_msg_sig, &taproot_sig],
                     true,
                 )
-                    .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
                 if p_sig.to_signature().verify(
                     true,
                     &self.payload_bytes,
@@ -438,7 +438,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                             &[&plot_sig.to_signature(), &auth_sig],
                             true,
                         )
-                            .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
+                        .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
                         let post_request = PostPartialRequest {
                             payload: self.payload.clone(),
                             aggregate_signature: agg_sig.to_signature().to_bytes().into(),

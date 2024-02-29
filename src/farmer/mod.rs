@@ -281,7 +281,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
             shared_state.clone(),
             client_run.clone(),
         )
-            .await
+        .await
     }
 
     async fn attach_client_handlers(

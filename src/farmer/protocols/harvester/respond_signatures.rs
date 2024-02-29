@@ -30,7 +30,7 @@ pub struct RespondSignaturesHandler<T: PoolClient + Sized + Sync + Send + 'stati
 }
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
-for RespondSignaturesHandler<T>
+    for RespondSignaturesHandler<T>
 {
     async fn handle_signature(&self, response: RespondSignatures) -> Result<(), Error> {
         if let Some(sps) = self
@@ -278,7 +278,7 @@ for RespondSignaturesHandler<T>
                                                     &request,
                                                     None,
                                                 )
-                                                    .to_bytes(),
+                                                .to_bytes(),
                                             ))
                                             .await;
                                         debug!("Declaring Proof of Space: {:?}", request);
@@ -353,8 +353,8 @@ for RespondSignaturesHandler<T>
                                     let foliage_agg_sig =
                                         AggregateSignature::aggregate(&foliage_sigs_to_agg, true)
                                             .map_err(|e| {
-                                                Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
-                                            })?;
+                                            Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
+                                        })?;
 
                                     let foliage_block_sigs_to_agg =
                                         if let Some(foliage_transaction_block_sig_taproot) =
@@ -375,9 +375,9 @@ for RespondSignaturesHandler<T>
                                         &foliage_block_sigs_to_agg,
                                         true,
                                     )
-                                        .map_err(|e| {
-                                            Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
-                                        })?;
+                                    .map_err(|e| {
+                                        Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
+                                    })?;
                                     if foliage_agg_sig.to_signature().verify(
                                         true,
                                         foliage_block_data_hash.as_ref(),
@@ -439,7 +439,7 @@ for RespondSignaturesHandler<T>
                                                     &request,
                                                     None,
                                                 )
-                                                    .to_bytes(),
+                                                .to_bytes(),
                                             ))
                                             .await;
                                         debug!("Sending Signed Values: {:?}", request);

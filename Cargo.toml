@@ -1,6 +1,6 @@
 [package]
 name = "dg_fast_farmer"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 authors = ["James Hoerr"]
 description = "A lite farmer for the Chia Blockchain."
