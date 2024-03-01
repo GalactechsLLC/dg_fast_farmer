@@ -3,7 +3,7 @@
 FastFarmer
 =====
 
-A lite farmer for the Chia Blockchain, written 100% in Rust, to replace Flexfarmer in mind. It currently supports harvesting Bladebit plots with CPU. Support for harvesting Bladebit plots with GPU will be added soon. Support for harvesting GH plots **with closed source** will also be added soon. NoSSD plots is not and will not be supported.
+A lite farmer for the Chia Blockchain, written 100% in Rust. It currently supports harvesting Bladebit plots with CPU. Support for harvesting Bladebit plots with GPU will be added soon. Support for harvesting GH plots **with closed source** will also be added soon. NoSSD plots is not and will not be supported.
 
 FastFarmer works with all pools (NFT) and OG plots.
 
@@ -15,6 +15,7 @@ Gigahorse Plots |  ❌  | ❌  |
 NoSSD Plots     |  ❌  | ❌  |
 ```
 
+To use FastFarmer to harvest Gigahorse plots with the closed source binaries/executables, go to https://github.com/evergreen-xch/ff_giga_bins
 
 
 Building
