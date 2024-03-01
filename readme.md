@@ -8,8 +8,8 @@ A lite farmer for the Chia Blockchain, written 100% in Rust, to replace Flexfarm
 FastFarmer works with all pools (NFT) and OG plots.
 
 
-```                | CPU  | GPU |
-                | ---- | --- |
+```
+                | CPU  | GPU  |
 Bladebit Plots  |  ✅  | ❌  |
 Gigahorse Plots |  ❌  | ❌  |
 NoSSD Plots     |  ❌  | ❌  |
