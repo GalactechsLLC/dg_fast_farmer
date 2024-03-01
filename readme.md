@@ -3,7 +3,15 @@
 FastFarmer
 =====
 
-A lite farmer for the Chia Blockchain.
+A lite farmer for the Chia Blockchain, written 100% in Rust, to replace Flexfarmer in mind. It currently supports harvesting Bladebit plots with CPU. Support for harvesting Bladebit plots with GPU will be added soon. Support for harvesting GH plots **with closed source** will also be added soon. NoSSD plots is not and will not be supported.
+
+                | CPU  | GPU |
+                | ---- | --- |
+Bladebit Plots  |  ✅  | ❌  |
+Gigahorse Plots |  ❌  | ❌  |
+NoSSD Plots     |  ❌  | ❌  |
+
+
 
 
 Building
@@ -22,6 +30,16 @@ sudo cp target/release/ff /usr/local/bin/ff
 Running
 --------
 
+To run the Farmer with TUI Interface(Default):
+```
+ff
+```
+
+To run the Farmer in CLI mode:
+```
+ff run
+```
+
 To generate the farmer config:
 ```
 ff init -f FULLNODE_HOST -p FULLNODE_PORT -n SELECTED_NETWORK
@@ -35,16 +53,6 @@ ff init -f FULLNODE_HOST -p FULLNODE_PORT -r FULLNODE_RPC_HOST -o FULLNODE_RPC_P
 For Wallets with lots of transactions, the init call runs much faster when targeting a launcher_id with -l:
 ```
 ff init -f FULLNODE_HOST -p FULLNODE_PORT -r FULLNODE_RPC_HOST -o FULLNODE_RPC_PORT -n SELECTED_NETWORK -l LAUNCHER_ID
-```
-
-To run the Farmer with TUI Interface(Default):
-```
-ff
-```
-
-To run the Farmer in CLI mode:
-```
-ff run
 ```
 
 To Update the PlotNFTs in the Config:
