@@ -1,30 +1,23 @@
-use crate::cli::{
-    generate_config_from_mnemonic, get_config_path, join_pool, load_mnemonic_from_file,
-    prompt_for_mnemonic, update_pool_info, Action, Cli, GenerateConfig,
+use crate::cli::commands::{
+    cli_mode, generate_config_from_mnemonic, join_pool, tui_mode, update, update_pool_info,
+    GenerateConfig,
 };
-use crate::farmer::config::{load_keys, Config};
-use crate::farmer::{ExtendedFarmerSharedState, Farmer};
-use crate::tasks::pool_state_updater::pool_updater;
+use crate::cli::utils::{check_config, get_config_path, init_logger};
+use crate::cli::{Action, Cli, RunMode};
+use crate::farmer::config::Config;
 use clap::Parser;
-use dg_xch_clients::api::pool::DefaultPoolClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
-use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, MAINNET};
-use dg_xch_core::protocols::farmer::FarmerSharedState;
-use dg_xch_core::utils::await_termination;
-use hex::encode;
-use log::{error, info, LevelFilter};
+use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
+use dg_xch_serialize::ChiaProtocolVersion;
 use once_cell::sync::Lazy;
 use reqwest::header::USER_AGENT;
-use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::env;
 use std::io::Error;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tokio::fs::create_dir_all;
-use tokio::join;
-use tokio::task::JoinHandle;
+
+const PROTOCOL_VERSION: ChiaProtocolVersion = ChiaProtocolVersion::Chia0_0_36;
 
 fn _version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -32,9 +25,17 @@ fn _version() -> &'static str {
 fn _pkg_name() -> &'static str {
     env!("CARGO_PKG_NAME")
 }
-
+fn gh_version() -> &'static str {
+    "3.0"
+}
+fn chia_version() -> &'static str {
+    "2.2.1"
+}
 pub fn version() -> String {
     format!("{}: {}", _pkg_name(), _version())
+}
+pub fn header_version() -> String {
+    format!("{}={}", _pkg_name(), _version())
 }
 
 #[test]
@@ -48,8 +49,14 @@ pub static HEADERS: Lazy<HashMap<String, String>> = Lazy::new(|| {
         String::from("X-fast-farmer-version"),
         _version().to_string(),
     );
-    headers.insert(USER_AGENT.to_string(), version());
+    headers.insert(USER_AGENT.to_string(), header_version());
     headers.insert(String::from("X-dg-xch-pos-version"), dg_xch_pos::version());
+    headers.insert(String::from("X-gh-version"), gh_version().to_string());
+    headers.insert(String::from("X-chia-version"), chia_version().to_string());
+    headers.insert(
+        String::from("X-chia-protocol-version"),
+        PROTOCOL_VERSION.to_string(),
+    );
     headers
 });
 
@@ -57,6 +64,7 @@ pub mod cli;
 pub mod farmer;
 pub mod gui;
 pub mod harvesters;
+mod metrics;
 pub mod tasks;
 
 #[tokio::main]
@@ -75,81 +83,12 @@ async fn main() -> Result<(), Error> {
     };
     let action = cli.action.unwrap_or_default();
     match action {
-        Action::Gui {} => {
-            if !config_path.exists() {
-                eprintln!(
-                    "Failed to find config at {:?}, please run init",
-                    config_path
-                );
-                return Ok(());
+        Action::Run { mode } => {
+            check_config(&config_path)?;
+            match mode.unwrap_or_default() {
+                RunMode::Cli => cli_mode(config_path.as_path()).await,
+                RunMode::Tui => tui_mode(config_path.as_path()).await,
             }
-            let config = Config::try_from(&config_path).unwrap_or_default();
-            let config_arc = Arc::new(config);
-            gui::bootstrap(config_arc).await?;
-            Ok(())
-        }
-        Action::Run {} => {
-            if !config_path.exists() {
-                eprintln!(
-                    "Failed to find config at {:?}, please run init",
-                    config_path
-                );
-                return Ok(());
-            }
-            SimpleLogger::new()
-                .with_colors(true)
-                .with_level(LevelFilter::Info)
-                .env()
-                .init()
-                .unwrap_or_default();
-            let config = Config::try_from(&config_path).unwrap();
-            let config_arc = Arc::new(config);
-            let constants = CONSENSUS_CONSTANTS_MAP
-                .get(&config_arc.selected_network)
-                .unwrap_or(&MAINNET);
-            info!(
-                "Selected Network: {}, AggSig: {}",
-                &config_arc.selected_network,
-                &encode(&constants.agg_sig_me_additional_data)
-            );
-            let (farmer_private_keys, owner_secret_keys, auth_secret_keys, pool_public_keys) =
-                load_keys(config_arc.clone()).await;
-            let shared_state = Arc::new(FarmerSharedState {
-                farmer_private_keys: Arc::new(farmer_private_keys),
-                owner_secret_keys: Arc::new(owner_secret_keys),
-                auth_secret_keys: Arc::new(auth_secret_keys),
-                pool_public_keys: Arc::new(pool_public_keys),
-                data: Arc::new(ExtendedFarmerSharedState {
-                    config: config_arc.clone(),
-                    run: Arc::new(AtomicBool::new(true)),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
-
-            info!("Using Additional Headers: {:?}", &*HEADERS);
-            //Pool Updater vars
-            let pool_state = shared_state.clone();
-            let pool_state_handle: JoinHandle<()> =
-                tokio::spawn(async move { pool_updater(pool_state).await });
-
-            //Signal Handler to Shutdown the Async processes
-            let signal_run = shared_state.data.run.clone();
-            let signal_handle = tokio::spawn(async move {
-                let _ = await_termination().await;
-                signal_run.store(false, Ordering::Relaxed);
-            });
-
-            let pool_client = Arc::new(DefaultPoolClient::new());
-            let farmer = Farmer::new(shared_state, pool_client).await?;
-
-            //Client Vars
-            let client_handle: JoinHandle<Result<(), Error>> = tokio::spawn(async move {
-                farmer.run().await;
-                Ok(())
-            });
-            let _ = join!(pool_state_handle, client_handle, signal_handle);
-            Ok(())
         }
         Action::Init {
             fullnode_ws_host,
@@ -163,20 +102,10 @@ async fn main() -> Result<(), Error> {
             mnemonic_file,
             launcher_id,
         } => {
-            SimpleLogger::new()
-                .with_colors(true)
-                .with_level(LevelFilter::Info)
-                .env()
-                .init()
-                .unwrap_or_default();
-            let mnemonic = if let Some(mnemonic_file) = mnemonic_file {
-                load_mnemonic_from_file(mnemonic_file)?
-            } else {
-                prompt_for_mnemonic()?
-            };
+            init_logger();
             generate_config_from_mnemonic(GenerateConfig {
                 output_path: Some(config_path),
-                mnemonic,
+                mnemonic_file,
                 fullnode_ws_host,
                 fullnode_ws_port,
                 fullnode_rpc_host,
@@ -191,48 +120,47 @@ async fn main() -> Result<(), Error> {
             .await?;
             Ok(())
         }
-        Action::UpdatePoolInfo {} => {
-            SimpleLogger::new()
-                .with_colors(true)
-                .with_level(LevelFilter::Info)
-                .env()
-                .init()
-                .unwrap_or_default();
-            if !config_path.exists() {
-                error!(
-                    "Failed to find config at {:?}, please run init",
-                    config_path
-                );
-                return Ok(());
-            }
-            let config = Config::try_from(&config_path).unwrap_or_default();
-            let updated_config = update_pool_info(config).await?;
+        Action::Update {} => {
+            check_config(&config_path)?;
+            init_logger();
+            let config = Config::try_from(&config_path)?;
+            let updated_config = update(config).await?;
             updated_config.save_as_yaml(config_path)?;
+            Ok(())
+        }
+        Action::UpdatePoolInfo { launcher_id } => {
+            check_config(&config_path)?;
+            init_logger();
+            let config = Config::try_from(&config_path)?;
+            let updated_config = update_pool_info(config, launcher_id).await?;
+            updated_config.save_as_yaml(config_path)?;
+            Ok(())
+        }
+        Action::UpdatePayoutAddress { address } => {
+            check_config(&config_path)?;
+            init_logger();
+            let mut config = Config::try_from(&config_path)?;
+            let payout_address = parse_payout_address(&address)?;
+            let xch_address = encode_puzzle_hash(&Bytes32::from(payout_address), "xch")?;
+            for pool_info in &mut config.pool_info {
+                pool_info.payout_instructions = xch_address.clone();
+            }
+            config.payout_address = xch_address;
+            config.save_as_yaml(config_path)?;
             Ok(())
         }
         Action::JoinPool {
             pool_url,
-            mnemonic,
+            mnemonic_file,
             launcher_id,
             fee,
         } => {
-            if !config_path.exists() {
-                eprintln!(
-                    "Failed to find config at {:?}, please run init",
-                    config_path
-                );
-                return Ok(());
-            }
-            SimpleLogger::new()
-                .with_colors(true)
-                .with_level(LevelFilter::Info)
-                .env()
-                .init()
-                .unwrap_or_default();
-            let config = Config::try_from(&config_path).unwrap_or_default();
-            let updated_config = join_pool(config, pool_url, mnemonic, launcher_id, fee).await?;
+            check_config(&config_path)?;
+            init_logger();
+            let config = Config::try_from(&config_path).unwrap();
+            let updated_config =
+                join_pool(config, pool_url, mnemonic_file, launcher_id, fee).await?;
             updated_config.save_as_yaml(config_path)?;
-
             Ok(())
         }
     }

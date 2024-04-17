@@ -1,6 +1,6 @@
 use crate::farmer::config::Config;
 use crate::farmer::ExtendedFarmerSharedState;
-use crate::HEADERS;
+use crate::{HEADERS, PROTOCOL_VERSION};
 use blst::min_pk::SecretKey;
 use dg_xch_clients::api::pool::{DefaultPoolClient, PoolClient};
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
@@ -12,7 +12,7 @@ use dg_xch_core::protocols::pool::{
     PoolError, PoolErrorCode, PostFarmerPayload, PostFarmerRequest, PostFarmerResponse,
     PutFarmerPayload, PutFarmerRequest, PutFarmerResponse,
 };
-use dg_xch_keys::parse_payout_address;
+use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
 use dg_xch_serialize::{hash_256, ChiaSerialize};
 use log::{debug, error, info, warn};
 use std::collections::hash_map::Entry;
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
 const UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL: u64 = 120;
@@ -39,7 +39,7 @@ pub async fn pool_updater(shared_state: Arc<FarmerSharedState<ExtendedFarmerShar
         {
             info!("Updating Pool State");
             update_pool_state(
-                shared_state.auth_secret_keys.as_ref(),
+                shared_state.owner_public_keys_to_auth_secret_keys.as_ref(),
                 shared_state.owner_secret_keys.as_ref(),
                 shared_state.pool_states.clone(),
                 pool_client.clone(),
@@ -48,7 +48,7 @@ pub async fn pool_updater(shared_state: Arc<FarmerSharedState<ExtendedFarmerShar
             .await;
             first = false;
             last_update = Instant::now();
-            shared_state.data.gui_stats.lock().await.last_pool_update = SystemTime::now()
+            shared_state.data.gui_stats.write().await.last_pool_update = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .expect("System Time should be Greater than Epoch")
                 .as_secs();
@@ -75,7 +75,7 @@ pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
         target_puzzle_hash: pool_config.target_puzzle_hash,
         authentication_token,
     }
-    .to_bytes();
+    .to_bytes(PROTOCOL_VERSION);
     let to_sign = hash_256(&msg);
     let signature = sign(authentication_sk, &to_sign);
     if !verify_signature(&authentication_sk.sk_to_pk(), &to_sign, &signature) {
@@ -140,7 +140,7 @@ pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
         })?,
         suggested_difficulty,
     };
-    let to_sign = hash_256(payload.to_bytes());
+    let to_sign = hash_256(payload.to_bytes(PROTOCOL_VERSION));
     let signature = sign(owner_sk, &to_sign);
     if !verify_signature(&owner_sk.sk_to_pk(), &to_sign, &signature) {
         error!("Farmer POST Failed to Validate Signature");
@@ -178,7 +178,7 @@ pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
         payout_instructions: parse_payout_address(payout_instructions).ok(),
         suggested_difficulty,
     };
-    let to_sign = hash_256(payload.to_bytes());
+    let to_sign = hash_256(payload.to_bytes(PROTOCOL_VERSION));
     let signature = sign(owner_sk, &to_sign);
     if !verify_signature(&owner_sk.sk_to_pk(), &to_sign, &signature) {
         error!("Local Failed to Validate Signature");
@@ -197,7 +197,7 @@ pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
 }
 
 pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
-    pool_states: Arc<Mutex<HashMap<Bytes32, FarmerPoolState>>>,
+    pool_states: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
     pool_config: &PoolWalletConfig,
     authentication_token_timeout: u8,
     authentication_sk: &SecretKey,
@@ -211,7 +211,7 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
     )
     .await?;
     pool_states
-        .lock()
+        .write()
         .await
         .get_mut(&pool_config.p2_singleton_puzzle_hash)
         .unwrap_or_else(|| {
@@ -222,7 +222,7 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
         })
         .current_difficulty = Some(response.current_difficulty);
     pool_states
-        .lock()
+        .write()
         .await
         .get_mut(&pool_config.p2_singleton_puzzle_hash)
         .unwrap_or_else(|| {
@@ -235,7 +235,7 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
     info!(
         "Updating Pool Difficulty: {:?} ",
         pool_states
-            .lock()
+            .read()
             .await
             .get(&pool_config.p2_singleton_puzzle_hash)
             .unwrap_or_else(|| panic!(
@@ -247,7 +247,7 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
     info!(
         "Updating Current Points: {:?} ",
         pool_states
-            .lock()
+            .read()
             .await
             .get(&pool_config.p2_singleton_puzzle_hash)
             .unwrap_or_else(|| panic!(
@@ -262,7 +262,7 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
 pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
     auth_keys: &HashMap<Bytes48, SecretKey>,
     owner_keys: &HashMap<Bytes48, SecretKey>,
-    pool_states: Arc<Mutex<HashMap<Bytes32, FarmerPoolState>>>,
+    pool_states: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
     client: Arc<T>,
     config: Arc<Config>,
 ) {
@@ -276,7 +276,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                 pool_config.p2_singleton_puzzle_hash
             );
             if let Entry::Vacant(s) = pool_states
-                .lock()
+                .write()
                 .await
                 .entry(pool_config.p2_singleton_puzzle_hash)
             {
@@ -295,7 +295,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                 });
             }
             pool_states
-                .lock()
+                .write()
                 .await
                 .get_mut(&pool_config.p2_singleton_puzzle_hash)
                 .unwrap_or_else(|| {
@@ -316,9 +316,9 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                 continue;
             }
             let next_pool_info_update = pool_states
-                .lock()
+                .read()
                 .await
-                .get_mut(&pool_config.p2_singleton_puzzle_hash)
+                .get(&pool_config.p2_singleton_puzzle_hash)
                 .unwrap_or_else(|| {
                     panic!(
                         "Item Added to Map Above, Expected {} to exist",
@@ -335,7 +335,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                 match client.get_pool_info(&pool_config.pool_url).await {
                     Ok(pool_info) => {
                         pool_states
-                            .lock()
+                            .write()
                             .await
                             .get_mut(&pool_config.p2_singleton_puzzle_hash)
                             .unwrap_or_else(|| {
@@ -348,9 +348,9 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                             Some(pool_info.authentication_token_timeout);
                         // Only update the first time from GET /pool_info, gets updated from GET /farmer later
                         let is_first = pool_states
-                            .lock()
+                            .read()
                             .await
-                            .get_mut(&pool_config.p2_singleton_puzzle_hash)
+                            .get(&pool_config.p2_singleton_puzzle_hash)
                             .unwrap_or_else(|| {
                                 panic!(
                                     "Item Added to Map Above, Expected {} to exist",
@@ -361,7 +361,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                             .is_none();
                         if is_first {
                             pool_states
-                                .lock()
+                                .write()
                                 .await
                                 .get_mut(&pool_config.p2_singleton_puzzle_hash)
                                 .unwrap_or_else(|| {
@@ -373,7 +373,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                 .current_difficulty = Some(pool_info.minimum_difficulty);
                         }
                         pool_states
-                            .lock()
+                            .write()
                             .await
                             .get_mut(&pool_config.p2_singleton_puzzle_hash)
                             .unwrap_or_else(|| {
@@ -387,7 +387,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     }
                     Err(e) => {
                         pool_states
-                            .lock()
+                            .write()
                             .await
                             .get_mut(&pool_config.p2_singleton_puzzle_hash)
                             .unwrap_or_else(|| {
@@ -405,7 +405,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                 debug!("Not Ready for Update");
             }
             let next_farmer_update = pool_states
-                .lock()
+                .read()
                 .await
                 .get(&pool_config.p2_singleton_puzzle_hash)
                 .unwrap_or_else(|| {
@@ -421,7 +421,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
             );
             if Instant::now() >= next_farmer_update {
                 pool_states
-                    .lock()
+                    .write()
                     .await
                     .get_mut(&pool_config.p2_singleton_puzzle_hash)
                     .unwrap_or_else(|| {
@@ -433,7 +433,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     .next_farmer_update =
                     Instant::now() + Duration::from_secs(UPDATE_POOL_FARMER_INFO_INTERVAL);
                 let authentication_token_timeout = pool_states
-                    .lock()
+                    .read()
                     .await
                     .get(&pool_config.p2_singleton_puzzle_hash)
                     .unwrap_or_else(|| {
@@ -551,7 +551,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         false
                     };
                     let current_difficulty = pool_states
-                        .lock()
+                        .read()
                         .await
                         .get(&pool_config.p2_singleton_puzzle_hash)
                         .unwrap_or_else(|| {
@@ -563,6 +563,26 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         .current_difficulty;
                     let difficulty_update_required = pool_config.difficulty.unwrap_or_default() > 0
                         && current_difficulty < pool_config.difficulty;
+                    debug!(
+                        "Current Pool Payout Address: {}",
+                        encode_puzzle_hash(
+                            &Bytes32::from(
+                                parse_payout_address(&old_instructions).unwrap_or_default()
+                            ),
+                            "xch"
+                        )
+                        .unwrap_or_default()
+                    );
+                    debug!(
+                        "Desired Pool Payout Address: {}",
+                        encode_puzzle_hash(
+                            &Bytes32::from(
+                                parse_payout_address(&config.payout_address).unwrap_or_default()
+                            ),
+                            "xch"
+                        )
+                        .unwrap_or_default()
+                    );
                     if payout_instructions_update_required || difficulty_update_required {
                         if payout_instructions_update_required {
                             info!(
@@ -602,11 +622,11 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     Ok(res) => {
                                         if res.suggested_difficulty.is_some() {
                                             pool_states
-                                                .lock()
+                                                .write()
                                                 .await
                                                 .get_mut(&pool_config.p2_singleton_puzzle_hash)
                                                 .unwrap_or_else(|| panic!("Item Added to Map Above, Expected {} to exist",
-                                                                          &pool_config.p2_singleton_puzzle_hash))
+                                                    &pool_config.p2_singleton_puzzle_hash))
                                                 .current_difficulty = pool_config.difficulty
                                         }
                                         info!("Farmer Update Response: {:?}", res);

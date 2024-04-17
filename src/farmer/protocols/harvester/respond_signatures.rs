@@ -1,5 +1,6 @@
 use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvesters, SignatureHandler};
+use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
 use blst::min_pk::AggregateSignature;
 use blst::BLST_ERROR;
@@ -12,7 +13,7 @@ use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_core::protocols::farmer::{DeclareProofOfSpace, SignedValues};
 use dg_xch_core::protocols::harvester::RespondSignatures;
 use dg_xch_core::protocols::{ChiaMessage, ProtocolMessageTypes};
-use dg_xch_keys::decode_puzzle_hash;
+use dg_xch_keys::{decode_puzzle_hash, parse_payout_address};
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
@@ -36,7 +37,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
         if let Some(sps) = self
             .shared_state
             .signage_points
-            .lock()
+            .read()
             .await
             .get(&response.sp_hash)
         {
@@ -67,20 +68,22 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                     ));
                 }
                 let mut pospace = None;
+                if let Some(proofs) = self
+                    .shared_state
+                    .proofs_of_space
+                    .read()
+                    .await
+                    .get(&response.sp_hash)
                 {
-                    let locked = self.shared_state.proofs_of_space.lock().await;
-                    let proofs = locked.get(&response.sp_hash);
-                    if let Some(proofs) = proofs {
-                        for (plot_identifier, candidate_pospace) in proofs {
-                            if *plot_identifier == response.plot_identifier {
-                                pospace = Some(candidate_pospace.clone());
-                                break;
-                            }
+                    for (plot_identifier, candidate_pospace) in proofs {
+                        if *plot_identifier == response.plot_identifier {
+                            pospace = Some(candidate_pospace.clone());
+                            break;
                         }
-                    } else {
-                        debug!("Failed to load farmer proofs for {}", &response.sp_hash);
-                        return Ok(());
                     }
+                } else {
+                    debug!("Failed to load farmer proofs for {}", &response.sp_hash);
+                    return Ok(());
                 }
                 if let Some(pospace) = pospace {
                     let include_taproot = pospace.pool_contract_puzzle_hash.is_some();
@@ -218,7 +221,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                                 )?,
                                             };
                                             let pool_target_signature =
-                                                sign(sk, &pool_target.to_bytes());
+                                                sign(sk, &pool_target.to_bytes(PROTOCOL_VERSION));
                                             (Some(pool_target), Some(pool_target_signature))
                                         } else {
                                             error!("Don't have the private key for the pool key used by harvester: {pool_public_key}");
@@ -248,9 +251,9 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         {
                                             farmer_reward_address_override
                                         } else {
-                                            decode_puzzle_hash(
+                                            Bytes32::from(parse_payout_address(
                                                 &self.shared_state.data.config.payout_address,
-                                            )?
+                                            )?)
                                         },
                                         pool_target,
                                         pool_signature: pool_target_signature
@@ -263,22 +266,23 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         .shared_state
                                         .data
                                         .full_node_client
-                                        .lock()
+                                        .read()
                                         .await
-                                        .as_mut()
+                                        .as_ref()
                                     {
                                         let _ = client
                                             .client
                                             .connection
-                                            .lock()
+                                            .write()
                                             .await
                                             .send(Message::Binary(
                                                 ChiaMessage::new(
                                                     ProtocolMessageTypes::DeclareProofOfSpace,
+                                                    PROTOCOL_VERSION,
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(),
+                                                .to_bytes(PROTOCOL_VERSION),
                                             ))
                                             .await;
                                         debug!("Declaring Proof of Space: {:?}", request);
@@ -288,7 +292,17 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                             "  Declaring New Proof of Space  ", 56
                                         );
                                         let bottom = format!("{:🌱<1$}", "", 43);
-                                        info!("\n{top}\n{mid}\n{bottom}")
+                                        info!("\n{top}\n{mid}\n{bottom}");
+                                        if let Some(Some(declared)) = self
+                                            .shared_state
+                                            .metrics
+                                            .read()
+                                            .await
+                                            .as_ref()
+                                            .map(|v| &v.proofs_declared)
+                                        {
+                                            declared.inc();
+                                        }
                                     } else {
                                         error!(
                                             "Failed to declare Proof of Space: {:?} No Client",
@@ -424,22 +438,23 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         .shared_state
                                         .data
                                         .full_node_client
-                                        .lock()
+                                        .read()
                                         .await
-                                        .as_mut()
+                                        .as_ref()
                                     {
                                         let _ = client
                                             .client
                                             .connection
-                                            .lock()
+                                            .write()
                                             .await
                                             .send(Message::Binary(
                                                 ChiaMessage::new(
                                                     ProtocolMessageTypes::SignedValues,
+                                                    PROTOCOL_VERSION,
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(),
+                                                .to_bytes(PROTOCOL_VERSION),
                                             ))
                                             .await;
                                         debug!("Sending Signed Values: {:?}", request);
