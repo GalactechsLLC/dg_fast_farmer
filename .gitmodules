@@ -1,4 +1,4 @@
 [submodule "dg_xch_utils"]
 	path = dg_xch_utils
-	url = git@github.com:GalactechsLLC/dg_xch_utils.git
+	url = https://github.com/GalactechsLLC/dg_xch_utils.git
 	branch = protocol_updates
