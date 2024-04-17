@@ -1,6 +1,6 @@
 pub mod druid_garden;
 
-use crate::cli::get_ssl_root_path;
+use crate::cli::utils::get_ssl_root_path;
 use crate::farmer::ExtendedFarmerSharedState;
 use crate::harvesters::druid_garden::DruidGardenHarvester;
 use async_trait::async_trait;
@@ -72,7 +72,7 @@ pub async fn load_harvesters(
             pool_public_keys.push(p_sk.sk_to_pk().to_bytes().into());
         }
     }
-    shared_state.data.gui_stats.lock().await.keys = farmer_public_keys.clone();
+    shared_state.data.gui_stats.write().await.keys = farmer_public_keys.clone();
     let pool_contract_hashes = shared_state
         .data
         .config
@@ -103,6 +103,7 @@ pub async fn load_harvesters(
             shared_state.data.run.clone(),
             &shared_state.data.config.selected_network,
             client_id,
+            shared_state.clone(),
         )
         .await?;
         harvesters.insert(
@@ -110,8 +111,8 @@ pub async fn load_harvesters(
             Arc::new(Harvesters::DruidGarden(harvester)),
         );
     }
-    shared_state.data.gui_stats.lock().await.total_plot_count = sum;
-    shared_state.data.gui_stats.lock().await.total_plot_space = total_size;
+    shared_state.data.gui_stats.write().await.total_plot_count = sum;
+    shared_state.data.gui_stats.write().await.total_plot_space = total_size;
     Ok(Arc::new(harvesters))
 }
 

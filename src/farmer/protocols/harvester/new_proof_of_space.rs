@@ -1,7 +1,7 @@
 use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
 use crate::farmer::{load_client_id, ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvester, Harvesters, ProofHandler, SignatureHandler};
-use crate::HEADERS;
+use crate::{HEADERS, PROTOCOL_VERSION};
 use async_trait::async_trait;
 use blst::min_pk::{AggregateSignature, PublicKey, Signature};
 use blst::BLST_ERROR;
@@ -24,6 +24,7 @@ use dg_xch_core::protocols::pool::{
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::{hash_256, ChiaSerialize};
 use log::{debug, error, info, warn};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::sync::atomic::Ordering;
@@ -45,7 +46,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfS
         if let Some(sps) = self
             .shared_state
             .signage_points
-            .lock()
+            .read()
             .await
             .get(&new_pos.sp_hash)
         {
@@ -141,24 +142,32 @@ fn format_big_number(number: u32) -> String {
 
 impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
     async fn _handle_proof(&self, sp: &NewSignagePoint, qs: &Bytes32, new_pos: &NewProofOfSpace) {
+        match self
+            .shared_state
+            .proofs_of_space
+            .write()
+            .await
+            .entry(new_pos.sp_hash)
         {
-            let mut farmer_pos = self.shared_state.proofs_of_space.lock().await;
-            if farmer_pos.get(&new_pos.sp_hash).is_none() {
-                farmer_pos.insert(new_pos.sp_hash, vec![]);
+            Entry::Occupied(mut e) => {
+                e.get_mut()
+                    .push((new_pos.plot_identifier.clone(), new_pos.proof.clone()));
             }
-            farmer_pos
-                .get_mut(&new_pos.sp_hash)
-                .expect("Should not happen, item created above")
-                .push((new_pos.plot_identifier.clone(), new_pos.proof.clone()));
+            Entry::Vacant(e) => {
+                e.insert(vec![(
+                    new_pos.plot_identifier.clone(),
+                    new_pos.proof.clone(),
+                )]);
+            }
         }
         self.shared_state
             .cache_time
-            .lock()
+            .write()
             .await
             .insert(new_pos.sp_hash, Instant::now());
         self.shared_state
             .quality_to_identifiers
-            .lock()
+            .write()
             .await
             .insert(
                 *qs,
@@ -171,7 +180,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
             );
         self.shared_state
             .cache_time
-            .lock()
+            .write()
             .await
             .insert(*qs, Instant::now());
         let sig_handle = RespondSignaturesHandler {
@@ -190,22 +199,22 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
                         (
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::ChallengeChainVdf,
-                                data: vdf.cc_vdf.to_bytes(),
+                                data: vdf.cc_vdf.to_bytes(PROTOCOL_VERSION),
                             },
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::RewardChainVdf,
-                                data: vdf.rc_vdf.to_bytes(),
+                                data: vdf.rc_vdf.to_bytes(PROTOCOL_VERSION),
                             },
                         )
                     } else if let Some(sub_slot_data) = sp_data.sub_slot_data.as_ref() {
                         (
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::ChallengeChainSubSlot,
-                                data: sub_slot_data.cc_sub_slot.to_bytes(),
+                                data: sub_slot_data.cc_sub_slot.to_bytes(PROTOCOL_VERSION),
                             },
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::RewardChainSubSlot,
-                                data: sub_slot_data.rc_sub_slot.to_bytes(),
+                                data: sub_slot_data.rc_sub_slot.to_bytes(PROTOCOL_VERSION),
                             },
                         )
                     } else {
@@ -249,103 +258,131 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
         qs: &Bytes32,
         new_pos: NewProofOfSpace,
     ) -> Result<(), Error> {
-        if let Some(pool_state) = self
+        if self
             .shared_state
             .pool_states
-            .lock()
+            .read()
             .await
-            .get_mut(p2_singleton_puzzle_hash)
+            .get(p2_singleton_puzzle_hash)
+            .is_none()
         {
-            if let Some(pool_config) = &pool_state.pool_config {
-                if pool_config.pool_url.is_empty()
-                    || new_pos.proof.pool_contract_puzzle_hash.is_none()
-                {
-                } else if let Some(pool_dif) = pool_state.current_difficulty {
-                    let required_iters = calculate_iterations_quality(
-                        self.constants.difficulty_constant_factor,
-                        qs,
-                        new_pos.proof.size,
-                        pool_dif,
-                        &new_pos.sp_hash,
-                    );
-                    let pool_required_iters = calculate_sp_interval_iters(
-                        self.constants,
-                        self.constants.pool_sub_slot_iters,
-                    )?;
-                    if required_iters > pool_required_iters {
-                        warn!(
-                            "Proof of space not good enough for pool {}: {:?} {qs:?}",
-                            pool_config.pool_url, pool_state.current_difficulty
-                        );
-                    } else if let Some(auth_token_timeout) = pool_state.authentication_token_timeout
-                    {
-                        let shared_state = self.shared_state.clone();
-                        let payload = PostPartialPayload {
-                            launcher_id: pool_config.launcher_id,
-                            authentication_token: get_current_authentication_token(
-                                auth_token_timeout,
-                            ),
-                            proof_of_space: new_pos.proof.clone(),
-                            sp_hash: new_pos.sp_hash,
-                            end_of_sub_slot: new_pos.signage_point_index == 0,
-                            harvester_id: load_client_id(shared_state.as_ref()).await?,
-                        };
-                        let payload_bytes = hash_256(payload.to_bytes());
-                        let sp_src_data = {
-                            if new_pos.include_source_signature_data
-                                || new_pos.farmer_reward_address_override.is_some()
-                            {
-                                Some(vec![Some(SignatureRequestSourceData {
-                                    kind: SigningDataKind::Partial,
-                                    data: payload.to_bytes(),
-                                })])
-                            } else {
-                                None
-                            }
-                        };
-                        let request = RequestSignatures {
-                            plot_identifier: new_pos.plot_identifier.clone(),
-                            challenge_hash: new_pos.challenge_hash,
-                            sp_hash: new_pos.sp_hash,
-                            messages: vec![Bytes32::new(&payload_bytes)],
-                            message_data: sp_src_data,
-                            rc_block_unfinished: None,
-                        };
-                        let handler = PartialHandler {
-                            pool_client: self.pool_client.clone(),
-                            shared_state: self.shared_state.clone(),
-                            p2_singleton_puzzle_hash: *p2_singleton_puzzle_hash,
-                            new_pos,
-                            auth_token_timeout,
-                            payload,
-                            payload_bytes,
-                        };
-                        if let Some(h) = self.harvesters.get(&self.harvester_id) {
-                            let harvester = h.clone();
-                            tokio::spawn(async move {
-                                match harvester.as_ref() {
-                                    Harvesters::DruidGarden(h) => {
-                                        if let Err(e) = h.request_signatures(request, handler).await
-                                        {
-                                            error!("Error Requesting Signature: {}", e);
-                                        }
-                                    }
-                                }
-                            });
-                        } else {
-                            error!("Failed to find harvester with ID {}", &self.harvester_id);
-                        }
-                    } else {
-                        warn!("No pool specific authentication_token_timeout has been set for {p2_singleton_puzzle_hash}, check communication with the pool.");
-                    }
-                } else {
-                    warn!("No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this partial to {}.", pool_config.pool_url);
-                }
-            } else {
-                warn!("No Pool Config for {p2_singleton_puzzle_hash}");
-            }
-        } else {
             warn!("Did not find pool info for {p2_singleton_puzzle_hash}");
+            return Ok(());
+        }
+        let (pool_url, launcher_id) = if let Some(Some(config)) = self
+            .shared_state
+            .pool_states
+            .read()
+            .await
+            .get(p2_singleton_puzzle_hash)
+            .map(|v| v.pool_config.as_ref())
+        {
+            (config.pool_url.clone(), config.launcher_id)
+        } else {
+            warn!("No Pool Config for {p2_singleton_puzzle_hash}");
+            return Ok(());
+        };
+        if pool_url.is_empty() || new_pos.proof.pool_contract_puzzle_hash.is_none() {
+            return Ok(());
+        }
+
+        let (required_iters, pool_dif) = if let Some(Some(pool_dif)) = self
+            .shared_state
+            .pool_states
+            .read()
+            .await
+            .get(p2_singleton_puzzle_hash)
+            .map(|v| v.current_difficulty)
+        {
+            (
+                calculate_iterations_quality(
+                    self.constants.difficulty_constant_factor,
+                    qs,
+                    new_pos.proof.size,
+                    pool_dif,
+                    &new_pos.sp_hash,
+                ),
+                pool_dif,
+            )
+        } else {
+            warn!("No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this partial to {}.", pool_url);
+            return Ok(());
+        };
+        let pool_required_iters =
+            calculate_sp_interval_iters(self.constants, self.constants.pool_sub_slot_iters)?;
+        if required_iters > pool_required_iters {
+            warn!(
+                "Proof of space not good enough for pool {}: {:?} {qs:?}",
+                pool_url, pool_dif
+            );
+            return Ok(());
+        }
+        let auth_token_timeout = if let Some(Some(auth_token_timeout)) = self
+            .shared_state
+            .pool_states
+            .read()
+            .await
+            .get(p2_singleton_puzzle_hash)
+            .map(|v| v.authentication_token_timeout)
+        {
+            auth_token_timeout
+        } else {
+            warn!("No pool specific authentication_token_timeout has been set for {p2_singleton_puzzle_hash}, check communication with the pool.");
+            return Ok(());
+        };
+        let shared_state = self.shared_state.clone();
+        let payload = PostPartialPayload {
+            launcher_id,
+            authentication_token: get_current_authentication_token(auth_token_timeout),
+            proof_of_space: new_pos.proof.clone(),
+            sp_hash: new_pos.sp_hash,
+            end_of_sub_slot: new_pos.signage_point_index == 0,
+            harvester_id: load_client_id(shared_state.as_ref()).await?,
+        };
+        let payload_bytes = hash_256(payload.to_bytes(PROTOCOL_VERSION));
+        let sp_src_data = {
+            if new_pos.include_source_signature_data
+                || new_pos.farmer_reward_address_override.is_some()
+            {
+                Some(vec![Some(SignatureRequestSourceData {
+                    kind: SigningDataKind::Partial,
+                    data: payload.to_bytes(PROTOCOL_VERSION),
+                })])
+            } else {
+                None
+            }
+        };
+        let request = RequestSignatures {
+            plot_identifier: new_pos.plot_identifier.clone(),
+            challenge_hash: new_pos.challenge_hash,
+            sp_hash: new_pos.sp_hash,
+            messages: vec![Bytes32::new(&payload_bytes)],
+            message_data: sp_src_data,
+            rc_block_unfinished: None,
+        };
+        let handler = PartialHandler {
+            pool_client: self.pool_client.clone(),
+            shared_state: self.shared_state.clone(),
+            p2_singleton_puzzle_hash: *p2_singleton_puzzle_hash,
+            new_pos,
+            auth_token_timeout,
+            payload,
+            payload_bytes,
+            pool_dif,
+        };
+        if let Some(h) = self.harvesters.get(&self.harvester_id) {
+            let harvester = h.clone();
+            tokio::spawn(async move {
+                match harvester.as_ref() {
+                    Harvesters::DruidGarden(h) => {
+                        if let Err(e) = h.request_signatures(request, handler).await {
+                            error!("Error Requesting Signature: {}", e);
+                        }
+                    }
+                }
+            });
+        } else {
+            error!("Failed to find harvester with ID {}", &self.harvester_id);
         }
         Ok(())
     }
@@ -369,6 +406,7 @@ pub struct PartialHandler<T: PoolClient + Sized + Sync + Send + 'static> {
     pub new_pos: NewProofOfSpace,
     pub payload: PostPartialPayload,
     pub payload_bytes: Vec<u8>,
+    pub pool_dif: u64,
 }
 #[async_trait]
 impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for PartialHandler<T> {
@@ -418,86 +456,137 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                 break;
             }
         }
-
-        if let Some(pool_state) = self
+        if self
             .shared_state
             .pool_states
-            .lock()
+            .read()
             .await
-            .get_mut(&self.p2_singleton_puzzle_hash)
+            .get(&self.p2_singleton_puzzle_hash)
+            .is_none()
         {
-            if let Some(pool_config) = &pool_state.pool_config {
-                if let Some(auth_key) = self
-                    .shared_state
-                    .auth_secret_keys
-                    .get(&pool_config.owner_public_key)
-                {
-                    let auth_sig = sign(auth_key, &self.payload_bytes);
-                    if let Some(plot_sig) = plot_sig {
-                        let agg_sig = AggregateSignature::aggregate(
-                            &[&plot_sig.to_signature(), &auth_sig],
-                            true,
-                        )
+            warn!(
+                "Did not find pool info for {}",
+                &self.p2_singleton_puzzle_hash
+            );
+            return Ok(());
+        }
+        let (pool_url, owner_public_key) = if let Some(Some(config)) = self
+            .shared_state
+            .pool_states
+            .read()
+            .await
+            .get(&self.p2_singleton_puzzle_hash)
+            .map(|v| v.pool_config.as_ref())
+        {
+            (config.pool_url.clone(), config.owner_public_key)
+        } else {
+            warn!("No Pool Config for {}", self.p2_singleton_puzzle_hash);
+            return Ok(());
+        };
+        if let Some(auth_key) = self
+            .shared_state
+            .owner_public_keys_to_auth_secret_keys
+            .get(&owner_public_key)
+        {
+            let auth_sig = sign(auth_key, &self.payload_bytes);
+            if let Some(plot_sig) = plot_sig {
+                let agg_sig =
+                    AggregateSignature::aggregate(&[&plot_sig.to_signature(), &auth_sig], true)
                         .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
-                        let post_request = PostPartialRequest {
-                            payload: self.payload.clone(),
-                            aggregate_signature: agg_sig.to_signature().to_bytes().into(),
-                        };
-                        debug!(
-                            "Submitting partial for {} to {}",
-                            post_request.payload.launcher_id.to_string(),
-                            &pool_config.pool_url
-                        );
-                        match self
-                            .pool_client
-                            .post_partial(
-                                &pool_config.pool_url,
-                                post_request,
-                                &Some(HEADERS.clone()),
-                            )
+                let post_request = PostPartialRequest {
+                    payload: self.payload.clone(),
+                    aggregate_signature: agg_sig.to_signature().to_bytes().into(),
+                };
+                debug!(
+                    "Submitting partial for {} to {}",
+                    post_request.payload.launcher_id.to_string(),
+                    &pool_url
+                );
+                if let Some(v) = self
+                    .shared_state
+                    .pool_states
+                    .write()
+                    .await
+                    .get_mut(&self.p2_singleton_puzzle_hash)
+                {
+                    v.points_found_since_start += self.pool_dif;
+                    v.points_found_24h.push((Instant::now(), self.pool_dif));
+                }
+                if let Some(r) = self.shared_state.metrics.read().await.as_ref() {
+                    use std::time::Duration;
+                    let now = Instant::now();
+                    if let Some(c) = &r.points_found_24h {
+                        if let Some(v) = self
+                            .shared_state
+                            .pool_states
+                            .write()
                             .await
+                            .get_mut(&self.p2_singleton_puzzle_hash)
                         {
-                            Ok(resp) => {
-                                pool_state.current_points += resp.new_difficulty;
-                                if pool_state.current_difficulty != Some(resp.new_difficulty) {
-                                    info!(
-                                        "New Pool Difficulty: {:?} ",
-                                        pool_state.current_difficulty
-                                    );
-                                    pool_state.current_difficulty = Some(resp.new_difficulty);
-                                }
-                                info!("Current Points: {:?} ", pool_state.current_points);
+                            c.with_label_values(&[&&self.p2_singleton_puzzle_hash.to_string()])
+                                .set(
+                                    v.points_found_24h
+                                        .iter()
+                                        .filter(|v| {
+                                            now.duration_since(v.0)
+                                                < Duration::from_secs(60 * 60 * 24)
+                                        })
+                                        .map(|v| v.1)
+                                        .sum(),
+                                )
+                        }
+                    }
+                }
+                match self
+                    .pool_client
+                    .post_partial(&pool_url, post_request, &Some(HEADERS.clone()))
+                    .await
+                {
+                    Ok(resp) => {
+                        if let Some(v) = self
+                            .shared_state
+                            .pool_states
+                            .write()
+                            .await
+                            .get_mut(&self.p2_singleton_puzzle_hash)
+                        {
+                            v.current_points += resp.new_difficulty;
+                            if v.current_difficulty != Some(resp.new_difficulty) {
+                                info!("New Pool Difficulty: {:?} ", v.current_difficulty);
+                                v.current_difficulty = Some(resp.new_difficulty);
                             }
-                            Err(e) => {
-                                error!("Error in pooling: {:?}", e);
-                                if e.error_code == PoolErrorCode::ProofNotGoodEnough as u8 {
-                                    error!("Partial not good enough, forcing pool farmer update to get our current difficulty.");
-                                    self.shared_state
-                                        .data
-                                        .force_pool_update
-                                        .store(true, Ordering::Relaxed);
-                                }
-                                if e.error_code == PoolErrorCode::InvalidSignature as u8 {
-                                    error!("Invalid Signature, Forcing Pool Update");
-                                    pool_state.next_farmer_update = Instant::now();
-                                }
+                            info!("Current Points: {:?} ", v.current_points);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error in pooling: {:?}", e);
+                        if e.error_code == PoolErrorCode::ProofNotGoodEnough as u8 {
+                            error!("Partial not good enough, forcing pool farmer update to get our current difficulty.");
+                            self.shared_state
+                                .data
+                                .force_pool_update
+                                .store(true, Ordering::Relaxed);
+                        }
+                        if e.error_code == PoolErrorCode::InvalidSignature as u8 {
+                            error!("Invalid Signature, Forcing Pool Update");
+                            if let Some(v) = self
+                                .shared_state
+                                .pool_states
+                                .write()
+                                .await
+                                .get_mut(&self.p2_singleton_puzzle_hash)
+                            {
+                                v.next_farmer_update = Instant::now();
                             }
                         }
-                    } else {
-                        warn!("invalid plot Sig");
                     }
-                } else {
-                    warn!(
-                        "No authentication sk for {}",
-                        &self.p2_singleton_puzzle_hash
-                    );
                 }
             } else {
-                warn!("No Pool Config for {}", &self.p2_singleton_puzzle_hash);
+                warn!("invalid plot Sig");
             }
         } else {
             warn!(
-                "Did not find pool info for {}",
+                "No authentication sk for {}",
                 &self.p2_singleton_puzzle_hash
             );
         }

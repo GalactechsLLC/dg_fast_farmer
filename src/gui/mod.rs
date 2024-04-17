@@ -1,13 +1,14 @@
+use actix_web::web::Data;
+use actix_web::{App, HttpServer};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::Error;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ratatui::style::Stylize;
 use ratatui::{prelude::*, widgets::*};
@@ -16,20 +17,19 @@ use tui_logger::*;
 
 use crate::farmer::config::{load_keys, Config};
 use crate::farmer::{ExtendedFarmerSharedState, Farmer, GuiStats};
+use crate::metrics;
+use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
 use chrono::prelude::*;
-use dg_xch_clients::api::full_node::FullnodeAPI;
 use dg_xch_clients::api::pool::DefaultPoolClient;
-use dg_xch_clients::rpc::full_node::FullnodeClient;
-use dg_xch_clients::ClientSSLConfig;
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
 use dg_xch_core::protocols::farmer::FarmerSharedState;
 use log::{error, LevelFilter};
 use sysinfo::System;
-use tokio::join;
 use tokio::sync::Mutex;
 use tokio::task::{spawn_blocking, JoinHandle};
 use tokio::time::sleep;
+use tokio::{join, select};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Action {
@@ -43,14 +43,15 @@ pub enum Action {
 #[derive(Copy, Clone, Default, Debug, PartialEq)]
 struct SysInfo {
     cpu_usage: u16,
-    ram_usage: u16,
-    swap_usage: u16,
+    ram_used: u64,
+    ram_total: u64,
+    swap_used: u64,
+    swap_total: u64,
 }
 
 struct GuiState {
     system_info: Arc<Mutex<SysInfo>>,
     farmer_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    fullnode_state: Arc<Mutex<Option<FullNodeState>>>,
 }
 
 impl GuiState {
@@ -58,7 +59,6 @@ impl GuiState {
         GuiState {
             system_info: Default::default(),
             farmer_state: shared_state,
-            fullnode_state: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -77,7 +77,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
     let shared_state = Arc::new(FarmerSharedState {
         farmer_private_keys: Arc::new(farmer_private_keys),
         owner_secret_keys: Arc::new(owner_secret_keys),
-        auth_secret_keys: Arc::new(auth_secret_keys),
+        owner_public_keys_to_auth_secret_keys: Arc::new(auth_secret_keys),
         pool_public_keys: Arc::new(pool_public_keys),
         data: Arc::new(ExtendedFarmerSharedState {
             config: config.clone(),
@@ -108,47 +108,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
     });
     let fullnode_state = gui_state.clone();
     let fullnode_thread = tokio::spawn(async move {
-        let full_node_rpc = FullnodeClient::new(
-            &config.fullnode_rpc_host,
-            config.fullnode_rpc_port,
-            60,
-            config.ssl_root_path.clone().map(|s| ClientSSLConfig {
-                ssl_crt_path: Path::new(&s)
-                    .join("farmer/private_daemon.crt")
-                    .to_string_lossy()
-                    .to_string(),
-                ssl_key_path: Path::new(&s)
-                    .join("farmer/private_daemon.key")
-                    .to_string_lossy()
-                    .to_string(),
-                ssl_ca_crt_path: Path::new(&s)
-                    .join("ca/private_ca.crt")
-                    .to_string_lossy()
-                    .to_string(),
-            }),
-            &None,
-        );
-        let mut last_update = Instant::now();
-        loop {
-            if last_update.elapsed().as_secs() > 5 {
-                last_update = Instant::now();
-                let bc_state = full_node_rpc.get_blockchain_state().await;
-                match bc_state {
-                    Ok(bc_state) => {
-                        *fullnode_state.fullnode_state.lock().await = Some(FullNodeState {
-                            blockchain_state: bc_state,
-                        });
-                    }
-                    Err(e) => {
-                        error!("{:?}", e);
-                    }
-                }
-            }
-            if !fullnode_state.farmer_state.data.run.load(Ordering::Relaxed) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
+        update_blockchain(config.clone(), fullnode_state.farmer_state.clone()).await
     });
     let sys_info_gui_state = gui_state.clone();
     let sys_info_thread = tokio::spawn(async move {
@@ -159,20 +119,20 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
         system.refresh_cpu();
         system.refresh_memory();
         loop {
-            let sys_info_res = spawn_blocking(move || {
+            let results = spawn_blocking(move || {
                 system.refresh_cpu();
                 system.refresh_memory();
                 let si = SysInfo {
                     cpu_usage: system.global_cpu_info().cpu_usage() as u16,
-                    ram_usage: ((system.used_memory() as f32 / system.total_memory() as f32)
-                        * 100.0) as u16,
-                    swap_usage: ((system.used_swap() as f32 / system.total_swap() as f32) * 100.0)
-                        as u16,
+                    ram_used: system.used_memory(),
+                    ram_total: system.total_memory(),
+                    swap_used: system.used_swap(),
+                    swap_total: system.total_swap(),
                 };
                 (system, si)
             })
             .await;
-            let (sys, sys_info) = sys_info_res.unwrap_or_else(|e| {
+            let (sys, sys_info) = results.unwrap_or_else(|e| {
                 error!("Error Joining System Loading Thread: {:?}", e);
                 (System::new(), Default::default())
             });
@@ -189,11 +149,42 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     });
-    let (fn_res, sys_res, gui_res, farmer_res) = join!(
+    let metrics = shared_state.data.config.metrics.clone().unwrap_or_default();
+    let metrics_state = shared_state.clone();
+    let server_handle = if metrics.enabled {
+        tokio::spawn(async move {
+            let server_state = metrics_state.clone();
+            select! {
+                _ = HttpServer::new(move || {
+                        App::new()
+                            .app_data(Data::new(server_state.clone()))
+                            .configure(metrics::init)
+                    })
+                    .bind(("0.0.0.0", metrics.port))?
+                    .run()
+                => {
+                    Ok(())
+                }
+                _ = async {
+                    loop {
+                        if !metrics_state.data.run.load(Ordering::Relaxed) {
+                            break;
+                        }
+                    }
+                } => {
+                    Ok(())
+                }
+            }
+        })
+    } else {
+        tokio::spawn(async move { Ok::<(), Error>(()) })
+    };
+    let (fn_res, sys_res, gui_res, farmer_res, server_res) = join!(
         fullnode_thread,
         sys_info_thread,
         run_gui(&mut terminal, gui_state),
-        farmer_thread
+        farmer_thread,
+        server_handle
     );
     disable_raw_mode()?;
     execute!(
@@ -214,6 +205,9 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
     if let Err(err) = farmer_res {
         eprintln!("Error Joining Farmer Thread {err:?}");
     }
+    if let Err(err) = server_res {
+        eprintln!("Error Joining Server Thread {err:?}");
+    }
     Ok(())
 }
 
@@ -223,9 +217,15 @@ async fn run_gui<B: Backend>(
 ) -> std::io::Result<()> {
     loop {
         {
-            let farmer_state = gui_state.farmer_state.data.gui_stats.lock().await.clone();
+            let farmer_state = gui_state.farmer_state.data.gui_stats.read().await.clone();
             let sys_info = *gui_state.system_info.lock().await;
-            let fullnode_state = gui_state.fullnode_state.lock().await.clone();
+            let fullnode_state = gui_state
+                .farmer_state
+                .data
+                .fullnode_state
+                .read()
+                .await
+                .clone();
             terminal.draw(|f| ui(f, farmer_state, fullnode_state, sys_info))?;
         }
         if event::poll(Duration::from_millis(25))? {
@@ -327,9 +327,7 @@ fn ui(
         mempool_size = full_node.blockchain_state.mempool_size;
     }
     let formatted_timestamp: String = if timestamp != 0 {
-        let naive = NaiveDateTime::from_timestamp_opt(timestamp as i64, 0);
-        let datetime: DateTime<Utc> =
-            DateTime::from_naive_utc_and_offset(naive.unwrap_or_default(), Utc);
+        let datetime = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_default();
         datetime.format("%d-%m-%Y %H:%M:%S").to_string()
     } else {
         "N/A".to_string()
@@ -368,11 +366,27 @@ fn ui(
             .borders(Borders::ALL),
     );
     f.render_widget(fullnode_content, overview_chunks[2]);
-    let cpu_usage_widget = draw_gauge("CPU Usage", sys_info.cpu_usage);
+    let cpu_usage_widget = draw_gauge("System CPU Usage", sys_info.cpu_usage);
     f.render_widget(cpu_usage_widget, overview_chunks[3]);
-    let ram_usage_widget = draw_gauge("RAM Usage", sys_info.ram_usage);
+    let ram_title = format!(
+        "System RAM Usage: {:.2}Gb/{:.2}Gb",
+        sys_info.ram_used as f32 / 1024f32 / 1024f32 / 1024f32,
+        sys_info.ram_total as f32 / 1024f32 / 1024f32 / 1024f32
+    );
+    let ram_usage_widget = draw_gauge(
+        &ram_title,
+        ((sys_info.ram_used as f32 / sys_info.ram_total as f32) * 100f32) as u16,
+    );
     f.render_widget(ram_usage_widget, overview_chunks[4]);
-    let swap_usage_widget = draw_gauge("Swap Usage", sys_info.swap_usage);
+    let swap_title = format!(
+        "System Swap Usage: {:.2}Gb/{:.2}Gb",
+        sys_info.swap_used as f32 / 1024f32 / 1024f32 / 1024f32,
+        sys_info.swap_total as f32 / 1024f32 / 1024f32 / 1024f32
+    );
+    let swap_usage_widget = draw_gauge(
+        &swap_title,
+        ((sys_info.swap_used as f32 / sys_info.swap_total as f32) * 100f32) as u16,
+    );
     f.render_widget(swap_usage_widget, overview_chunks[5]);
 
     let logs_widget = draw_logs();

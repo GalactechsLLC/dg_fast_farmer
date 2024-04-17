@@ -1,6 +1,7 @@
 use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
 use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvester, Harvesters};
+use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_core::blockchain::proof_of_space::calculate_prefix_bits;
@@ -17,16 +18,16 @@ use std::collections::HashMap;
 use std::io::{Cursor, Error};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub struct NewSignagePointHandle<T: PoolClient + Sized + Sync + Send + 'static> {
     pub id: Uuid,
     pub harvester_id: Bytes32,
-    pub pool_state: Arc<Mutex<HashMap<Bytes32, FarmerPoolState>>>,
+    pub pool_state: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
     pub pool_client: Arc<T>,
-    pub signage_points: Arc<Mutex<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
-    pub cache_time: Arc<Mutex<HashMap<Bytes32, Instant>>>,
+    pub signage_points: Arc<RwLock<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
+    pub cache_time: Arc<RwLock<HashMap<Bytes32, Instant>>>,
     pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
     pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
     pub constants: &'static ConsensusConstants,
@@ -41,14 +42,14 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
     ) -> Result<(), Error> {
         debug!("NewSignagePoint Message. Starting Deserialization.");
         let mut cursor = Cursor::new(&msg.data);
-        let sp = NewSignagePoint::from_bytes(&mut cursor)?;
+        let sp = NewSignagePoint::from_bytes(&mut cursor, PROTOCOL_VERSION)?;
         debug!("NewSignagePoint Message. Finished Deserialization.");
         if sp.sp_source_data.is_none() {
             error!("No SignagePoint Source Data Included for Farmer which Requires it");
         }
         let mut pool_difficulties = vec![];
         debug!("Generating Pool Difficulties");
-        for (p2_singleton_puzzle_hash, pool_dict) in self.pool_state.lock().await.iter() {
+        for (p2_singleton_puzzle_hash, pool_dict) in self.pool_state.read().await.iter() {
             if let Some(config) = &pool_dict.pool_config {
                 if config.pool_url.is_empty() {
                     debug!("Self Pooling Detected for {p2_singleton_puzzle_hash}");
@@ -70,7 +71,16 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             "New Signage Point({}): {:?}",
             sp.signage_point_index, sp.challenge_hash
         );
-        *self.shared_state.data.last_sp_timestamp.lock().await = Instant::now();
+        let now = Instant::now();
+        let time_since_last_sp = now
+            .duration_since(*self.shared_state.data.last_sp_timestamp.read().await)
+            .as_millis();
+        self.shared_state
+            .data
+            .extended_metrics
+            .signage_point_interval
+            .observe(time_since_last_sp as f64 / 1000f64);
+        *self.shared_state.data.last_sp_timestamp.write().await = now;
         let filter_prefix_bits = calculate_prefix_bits(self.constants, sp.peak_height);
         let sp_hash = sp.challenge_chain_sp;
         let harvester_point = Arc::new(NewSignagePointHarvester {
@@ -82,10 +92,17 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             pool_difficulties,
             filter_prefix_bits,
         });
-        self.cache_time.lock().await.insert(sp_hash, Instant::now());
-        self.shared_state.data.gui_stats.lock().await.most_recent_sp =
-            (sp.challenge_hash, sp.signage_point_index);
-        match self.signage_points.lock().await.entry(sp_hash) {
+        self.cache_time
+            .write()
+            .await
+            .insert(sp_hash, Instant::now());
+        self.shared_state
+            .data
+            .gui_stats
+            .write()
+            .await
+            .most_recent_sp = (sp.challenge_hash, sp.signage_point_index);
+        match self.signage_points.write().await.entry(sp_hash) {
             Entry::Occupied(mut e) => {
                 e.get_mut().push(sp);
             }

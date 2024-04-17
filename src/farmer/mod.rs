@@ -1,8 +1,11 @@
-use crate::cli::get_ssl_root_path;
+use crate::cli::utils::get_ssl_root_path;
 use crate::farmer::config::Config;
 use crate::farmer::protocols::fullnode::new_signage_point::NewSignagePointHandle;
 use crate::farmer::protocols::fullnode::request_signed_values::RequestSignedValuesHandle;
+use crate::gui::FullNodeState;
 use crate::harvesters::{load_harvesters, Harvesters};
+use crate::metrics::Metrics;
+use crate::PROTOCOL_VERSION;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_clients::websocket::farmer::FarmerClient;
 use dg_xch_clients::websocket::WsClientConfig;
@@ -25,15 +28,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs::File;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub mod config;
 pub mod protocols;
 
-static PUBLIC_CRT: &str = "farmer/public_farmer.crt";
-static PUBLIC_KEY: &str = "farmer/public_farmer.key";
-static CA_PUBLIC_CRT: &str = "ca/chia_ca.crt";
+pub static PUBLIC_CRT: &str = "farmer/public_farmer.crt";
+pub static PUBLIC_KEY: &str = "farmer/public_farmer.key";
+pub static CA_PUBLIC_CRT: &str = "ca/chia_ca.crt";
+pub static PRIVATE_CRT: &str = "farmer/private_farmer.crt";
+pub static PRIVATE_KEY: &str = "farmer/private_farmer.key";
+pub static CA_PRIVATE_CRT: &str = "ca/private_ca.crt";
 
 #[derive(Clone, Default)]
 pub struct GuiStats {
@@ -49,9 +55,11 @@ pub struct ExtendedFarmerSharedState {
     pub(crate) config: Arc<Config>,
     pub(crate) run: Arc<AtomicBool>,
     pub(crate) force_pool_update: Arc<AtomicBool>,
-    pub(crate) full_node_client: Arc<Mutex<Option<FarmerClient<ExtendedFarmerSharedState>>>>,
-    pub(crate) gui_stats: Arc<Mutex<GuiStats>>,
-    pub(crate) last_sp_timestamp: Arc<Mutex<Instant>>,
+    pub(crate) full_node_client: Arc<RwLock<Option<FarmerClient<ExtendedFarmerSharedState>>>>,
+    pub(crate) gui_stats: Arc<RwLock<GuiStats>>,
+    pub(crate) last_sp_timestamp: Arc<RwLock<Instant>>,
+    pub(crate) extended_metrics: Arc<Metrics>,
+    pub(crate) fullnode_state: Arc<RwLock<Option<FullNodeState>>>,
 }
 impl Default for ExtendedFarmerSharedState {
     fn default() -> Self {
@@ -61,7 +69,9 @@ impl Default for ExtendedFarmerSharedState {
             force_pool_update: Arc::new(Default::default()),
             full_node_client: Arc::new(Default::default()),
             gui_stats: Arc::new(Default::default()),
-            last_sp_timestamp: Arc::new(Mutex::new(Instant::now())),
+            last_sp_timestamp: Arc::new(RwLock::new(Instant::now())),
+            extended_metrics: Arc::new(Default::default()),
+            fullnode_state: Arc::new(Default::default()),
         }
     }
 }
@@ -137,12 +147,12 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                 if !s.shared_state.data.run.load(Ordering::Relaxed) {
                     break;
                 }
-                if let Some(client) = s.shared_state.data.full_node_client.lock().await.as_ref() {
+                if let Some(client) = s.shared_state.data.full_node_client.read().await.as_ref() {
                     client_run.store(false, Ordering::Relaxed);
                     client
                         .client
                         .connection
-                        .lock()
+                        .write()
                         .await
                         .shutdown()
                         .await
@@ -159,7 +169,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                             continue;
                         } else {
                             info!("Farmer Client Initialized");
-                            *s.shared_state.data.full_node_client.lock().await = Some(c);
+                            *s.shared_state.data.full_node_client.write().await = Some(c);
                             break;
                         }
                     }
@@ -175,7 +185,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
             }
             let mut last_clear = Instant::now();
             loop {
-                if let Some(client) = s.shared_state.data.full_node_client.lock().await.as_ref() {
+                if let Some(client) = s.shared_state.data.full_node_client.read().await.as_ref() {
                     if client.is_closed() {
                         if !s.shared_state.data.run.load(Ordering::Relaxed) {
                             info!("Farmer Stopped");
@@ -187,14 +197,14 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     }
                 }
                 let dur = Instant::now()
-                    .duration_since(*s.shared_state.data.last_sp_timestamp.lock().await)
+                    .duration_since(*s.shared_state.data.last_sp_timestamp.read().await)
                     .as_secs();
-                if dur >= 180 {
+                if dur >= 60 {
                     info!(
                         "Failed to get Signage Point after {dur} seconds, restarting farmer client"
                     );
-                    *s.shared_state.data.last_sp_timestamp.lock().await = Instant::now();
-                    if let Some(c) = &*s.shared_state.data.full_node_client.lock().await {
+                    *s.shared_state.data.last_sp_timestamp.write().await = Instant::now();
+                    if let Some(c) = &*s.shared_state.data.full_node_client.read().await {
                         info!(
                             "Shutting Down old Farmer Client: {}:{}",
                             s.shared_state.data.config.fullnode_ws_host,
@@ -203,7 +213,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                         client_run.store(false, Ordering::Relaxed);
                         c.client
                             .connection
-                            .lock()
+                            .write()
                             .await
                             .shutdown()
                             .await
@@ -215,7 +225,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     let expired: Vec<Bytes32> = s
                         .shared_state
                         .cache_time
-                        .lock()
+                        .write()
                         .await
                         .iter()
                         .filter_map(|(k, v)| {
@@ -228,22 +238,22 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                         .collect();
                     s.shared_state
                         .cache_time
-                        .lock()
+                        .write()
                         .await
                         .retain(|k, _| !expired.contains(k));
                     s.shared_state
                         .signage_points
-                        .lock()
+                        .write()
                         .await
                         .retain(|k, _| !expired.contains(k));
                     s.shared_state
                         .quality_to_identifiers
-                        .lock()
+                        .write()
                         .await
                         .retain(|k, _| !expired.contains(k));
                     s.shared_state
                         .proofs_of_space
-                        .lock()
+                        .write()
                         .await
                         .retain(|k, _| !expired.contains(k));
                     last_clear = Instant::now();
@@ -276,6 +286,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     ssl_ca_crt_path: ssl_path.join(CA_PUBLIC_CRT).to_string_lossy().to_string(),
                 }),
                 software_version: None,
+                protocol_version: PROTOCOL_VERSION,
                 additional_headers: None,
             }),
             shared_state.clone(),
@@ -289,13 +300,13 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
         shared_state: &FarmerSharedState<ExtendedFarmerSharedState>,
         client: &mut FarmerClient<ExtendedFarmerSharedState>,
     ) -> Result<(), Error> {
-        client.client.connection.lock().await.clear().await;
+        client.client.connection.write().await.clear().await;
         let signage_handle_id = Uuid::new_v4();
         let harvester_id = load_client_id(shared_state).await?;
         client
             .client
             .connection
-            .lock()
+            .write()
             .await
             .subscribe(
                 signage_handle_id,
@@ -321,7 +332,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
         client
             .client
             .connection
-            .lock()
+            .write()
             .await
             .subscribe(
                 request_signed_values_id,

@@ -9,6 +9,16 @@ use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+const fn default_true() -> bool {
+    true
+}
+const fn default_metrics_port() -> u16 {
+    8080
+}
+const fn default_none<T>() -> Option<T> {
+    None
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FarmingInfo {
     pub farmer_secret_key: Bytes32,
@@ -18,13 +28,31 @@ pub struct FarmingInfo {
     pub auth_secret_key: Option<Bytes32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_metrics_port")]
+    pub port: u16,
+}
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: 8080,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DruidGardenHarvesterConfig {
+    #[serde(default = "Vec::new")]
     pub plot_directories: Vec<String>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HarvesterConfig {
+    #[serde(default = "default_none")]
     pub druid_garden: Option<DruidGardenHarvesterConfig>,
 }
 
@@ -40,6 +68,7 @@ pub struct Config {
     pub pool_info: Vec<PoolWalletConfig>,
     pub payout_address: String,
     pub harvester_configs: HarvesterConfig,
+    pub metrics: Option<MetricsConfig>,
 }
 impl Config {
     pub fn save_as_yaml<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
@@ -80,10 +109,12 @@ impl Default for Config {
             pool_info: vec![],
             payout_address: "".to_string(),
             harvester_configs: HarvesterConfig {
-                druid_garden: Some(DruidGardenHarvesterConfig {
-                    plot_directories: vec![],
-                }),
+                druid_garden: Some(DruidGardenHarvesterConfig::default()),
             },
+            metrics: Some(MetricsConfig {
+                enabled: true,
+                port: 8080,
+            }),
         }
     }
 }

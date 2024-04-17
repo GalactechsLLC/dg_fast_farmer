@@ -1,6 +1,7 @@
 use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
 use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvester, Harvesters};
+use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
@@ -36,12 +37,12 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
     ) -> Result<(), Error> {
         debug!("RequestSignedValues Message. Starting Deserialization.");
         let mut cursor = Cursor::new(&msg.data);
-        let request = RequestSignedValues::from_bytes(&mut cursor)?;
+        let request = RequestSignedValues::from_bytes(&mut cursor, PROTOCOL_VERSION)?;
         debug!("RequestSignedValues Message. Finished Deserialization.");
         if let Some(identifier) = self
             .shared_state
             .quality_to_identifiers
-            .lock()
+            .read()
             .await
             .get(&request.quality_string)
         {
@@ -51,13 +52,13 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
             if let Some(data) = request.foliage_block_data {
                 foliage_block_data = Some(SignatureRequestSourceData {
                     kind: SigningDataKind::FoliageBlockData,
-                    data: data.to_bytes(),
+                    data: data.to_bytes(PROTOCOL_VERSION),
                 });
             }
             if let Some(data) = request.foliage_transaction_block_data {
                 foliage_transaction_block = Some(SignatureRequestSourceData {
                     kind: SigningDataKind::FoliageTransactionBlock,
-                    data: data.to_bytes(),
+                    data: data.to_bytes(PROTOCOL_VERSION),
                 });
             }
             let request = RequestSignatures {

@@ -1,5 +1,7 @@
-use crate::farmer::{PathInfo, PlotInfo};
+use crate::farmer::{ExtendedFarmerSharedState, PathInfo, PlotInfo};
 use crate::harvesters::{FarmingKeys, Harvester, ProofHandler, SignatureHandler};
+use crate::metrics::Metrics;
+use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
 use blst::min_pk::{PublicKey, SecretKey};
 use dg_xch_core::blockchain::proof_of_space::{
@@ -12,6 +14,7 @@ use dg_xch_core::consensus::pot_iterations::{
     calculate_iterations_quality, calculate_sp_interval_iters,
 };
 use dg_xch_core::plots::PlotHeader;
+use dg_xch_core::protocols::farmer::FarmerSharedState;
 use dg_xch_core::protocols::harvester::{
     NewProofOfSpace, NewSignagePointHarvester, RequestSignatures, RespondSignatures,
 };
@@ -29,7 +32,7 @@ use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::available_parallelism;
 use std::time::{Duration, Instant, SystemTime};
@@ -38,12 +41,12 @@ use tokio::time::timeout;
 
 #[derive(Default)]
 pub struct PlotCounts {
-    pub og_passed: Arc<AtomicUsize>,
-    pub og_total: Arc<AtomicUsize>,
-    pub pool_total: Arc<AtomicUsize>,
-    pub pool_passed: Arc<AtomicUsize>,
-    pub compressed_passed: Arc<AtomicUsize>,
-    pub compressed_total: Arc<AtomicUsize>,
+    pub og_passed: Arc<AtomicU64>,
+    pub og_total: Arc<AtomicU64>,
+    pub pool_total: Arc<AtomicU64>,
+    pub pool_passed: Arc<AtomicU64>,
+    pub compressed_passed: Arc<AtomicU64>,
+    pub compressed_total: Arc<AtomicU64>,
 }
 
 pub struct DruidGardenHarvester {
@@ -55,6 +58,7 @@ pub struct DruidGardenHarvester {
     pub selected_network: String,
     pub uuid: Bytes32,
     pub client_id: Bytes32,
+    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
 }
 #[async_trait]
 impl Harvester for DruidGardenHarvester {
@@ -66,6 +70,12 @@ impl Harvester for DruidGardenHarvester {
     where
         T: ProofHandler + Sync + Send,
     {
+        let start = self
+            .shared_state
+            .data
+            .extended_metrics
+            .signage_point_processing_latency
+            .start_timer();
         let plot_counts = Arc::new(PlotCounts::default());
         let harvester_point = Arc::new(signage_point);
         let constants = Arc::new(
@@ -81,6 +91,7 @@ impl Harvester for DruidGardenHarvester {
             let data_arc = harvester_point.clone();
             let constants_arc = constants.clone();
             let plot_counts = plot_counts.clone();
+            let metrics = self.shared_state.data.extended_metrics.clone();
             let mut responses = vec![];
             let plot_handle = timeout(Duration::from_secs(20), tokio::spawn(async move {
                 let (plot_id, k, memo, c_level) = match plot_info.reader.header() {
@@ -89,7 +100,7 @@ impl Harvester for DruidGardenHarvester {
                     PlotHeader::GHv2_5(_) => {
                         return Err(Error::new(
                             ErrorKind::InvalidInput,
-                            "Use the Gigahorse FastFarmer to Farm Gigahorse Plots",
+                            "To Farm Gigahorse Plots you need to enable the Gigahorse Harvester",
                         ));
                     }
                 };
@@ -150,6 +161,7 @@ impl Harvester for DruidGardenHarvester {
                             }
                         }
                         for (index, quality) in qualities.into_iter() {
+                            let start = metrics.qualities_latency.start_timer();
                             let required_iters = calculate_iterations_quality(
                                 constants_arc.difficulty_constant_factor,
                                 &quality,
@@ -157,10 +169,12 @@ impl Harvester for DruidGardenHarvester {
                                 dif,
                                 &data_arc.sp_hash,
                             );
+                            start.stop_and_record();
                             if let Ok(sp_interval_iters) =
                                 calculate_sp_interval_iters(&constants_arc, sub_slot_iters)
                             {
                                 if required_iters < sp_interval_iters {
+                                    let start = metrics.proof_latency.start_timer();
                                     match plot_info.reader.fetch_ordered_proof(index).await {
                                         Ok(proof) => {
                                             let proof_bytes = proof_to_bytes(&proof);
@@ -168,7 +182,7 @@ impl Harvester for DruidGardenHarvester {
                                                 "File: {:?} Plot ID: {}, challenge: {sp_challenge_hash}, Quality Str: {}, proof_xs: {}",
                                                 path,
                                                 &plot_id,
-                                                encode(quality.to_bytes()),
+                                                encode(quality.to_bytes(PROTOCOL_VERSION)),
                                                 encode(&proof_bytes)
                                             );
                                             responses.push((
@@ -191,6 +205,7 @@ impl Harvester for DruidGardenHarvester {
                                             error!("Failed to read Proof: {:?}", e);
                                         }
                                     }
+                                    start.stop_and_record();
                                 } else {
                                     debug!(
                                         "Not Enough Iterations: {} > {}",
@@ -218,7 +233,7 @@ impl Harvester for DruidGardenHarvester {
                                     .handle_proof(NewProofOfSpace {
                                         challenge_hash: harvester_point.challenge_hash,
                                         sp_hash: harvester_point.sp_hash,
-                                        plot_identifier: encode(quality.to_bytes())
+                                        plot_identifier: encode(quality.to_bytes(PROTOCOL_VERSION))
                                             + path.file_name.as_str(),
                                         proof,
                                         signage_point_index: harvester_point.signage_point_index,
@@ -253,6 +268,11 @@ impl Harvester for DruidGardenHarvester {
                 }
             }
         }
+        let finished = start.stop_and_record();
+        info!(
+            "Finished Processing SP({}) in {:.3} seconds",
+            harvester_point.sp_hash, finished
+        );
         info!(
             "Passed Filter - OG: {}/{}. NFT: {}/{}. Compressed: {}/{}. Proofs Found: {}. Partials Found: NFT({}), Compressed({})",
             plot_counts.og_passed.load(Ordering::Relaxed),
@@ -265,6 +285,41 @@ impl Harvester for DruidGardenHarvester {
             nft_partials.load(Ordering::Relaxed),
             compressed_partials.load(Ordering::Relaxed),
         );
+        self.shared_state
+            .data
+            .extended_metrics
+            .total_proofs_found
+            .inc_by(proofs.load(Ordering::Relaxed));
+        self.shared_state
+            .data
+            .extended_metrics
+            .last_proofs_found
+            .set(proofs.load(Ordering::Relaxed));
+        let total_partials =
+            nft_partials.load(Ordering::Relaxed) + compressed_partials.load(Ordering::Relaxed);
+        self.shared_state
+            .data
+            .extended_metrics
+            .total_partials_found
+            .inc_by(total_partials);
+        self.shared_state
+            .data
+            .extended_metrics
+            .last_partials_found
+            .set(total_partials);
+        let total_passed = plot_counts.og_passed.load(Ordering::Relaxed)
+            + plot_counts.pool_passed.load(Ordering::Relaxed)
+            + plot_counts.compressed_passed.load(Ordering::Relaxed);
+        self.shared_state
+            .data
+            .extended_metrics
+            .total_passed_filter
+            .inc_by(total_passed);
+        self.shared_state
+            .data
+            .extended_metrics
+            .last_passed_filter
+            .set(total_passed);
         Ok(())
     }
 
@@ -294,10 +349,7 @@ impl Harvester for DruidGardenHarvester {
                 PlotHeader::GHv2_5(_) => {
                     return Err(Error::new(
                         ErrorKind::InvalidInput,
-                        format!(
-                            "Use the Gigahorse FastFarmer to Farm Gigahorse Plots: {}",
-                            file_name
-                        ),
+                        format!("To Farm Gigahorse Plots you need to enable the Gigahorse Harvester: {}", file_name),
                     ));
                 }
             },
@@ -343,6 +395,7 @@ impl DruidGardenHarvester {
         shutdown_signal: Arc<AtomicBool>,
         selected_network: &str,
         client_id: Bytes32,
+        shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
     ) -> Result<Self, Error> {
         let decompressor_pool = Arc::new(DecompressorPool::new(
             1,
@@ -357,6 +410,7 @@ impl DruidGardenHarvester {
                 &farming_keys.pool_contract_hashes,
                 vec![],
                 decompressor_pool.clone(),
+                shared_state.data.extended_metrics.clone(),
             )
             .await?,
         ));
@@ -364,6 +418,7 @@ impl DruidGardenHarvester {
         let plot_sync_dirs = plot_dirs.clone();
         let plot_sync_farming_keys = farming_keys.clone();
         let plot_sync_decompressor_pool = decompressor_pool.clone();
+        let plot_sync_shared_state = shared_state.clone();
         let _plot_sync = tokio::spawn(async move {
             let mut last_sync = Instant::now();
             loop {
@@ -386,6 +441,7 @@ impl DruidGardenHarvester {
                         &plot_sync_farming_keys.pool_contract_hashes,
                         existing_plot_paths.as_ref().clone(),
                         plot_sync_decompressor_pool.clone(),
+                        plot_sync_shared_state.data.extended_metrics.clone(),
                     )
                     .await
                     {
@@ -410,6 +466,7 @@ impl DruidGardenHarvester {
             selected_network: selected_network.to_string(),
             client_id,
             uuid: Bytes32::from(random::<[u8; 32]>()),
+            shared_state,
         })
     }
 }
@@ -421,6 +478,7 @@ async fn load_plots(
     pool_contract_hashes: &[Bytes32],
     existing_plot_paths: Vec<PathBuf>,
     decompressor_pool: Arc<DecompressorPool>,
+    metrics: Arc<Metrics>,
 ) -> Result<HashMap<PathInfo, Arc<PlotInfo>>, Error> {
     debug!("Started Loading Plots");
     if farmer_public_keys.is_empty() {
@@ -444,6 +502,7 @@ async fn load_plots(
         let pool_contract_hashes = pool_contract_hashes.clone();
         let existing_paths = existing_paths.clone();
         let decompressor_pool = decompressor_pool.clone();
+        let metrics = metrics.clone();
         let dir = dir.clone();
         debug!("Validating Plot Directory: {:?}", &dir);
         futures.push(timeout(
@@ -488,6 +547,7 @@ async fn load_plots(
                                     continue;
                                 }
                             };
+                            let plot_load = metrics.plot_load_latency.start_timer();
                             let plot_file = match DiskPlot::new(&path).await {
                                 Ok(plot_file) => plot_file,
                                 Err(e) => {
@@ -496,6 +556,7 @@ async fn load_plots(
                                     continue;
                                 }
                             };
+                            plot_load.stop_and_record();
                             match PlotReader::new(
                                 plot_file,
                                 Some(decompressor_pool.clone()),
@@ -636,7 +697,7 @@ async fn load_headers(
         PlotHeader::GHv2_5(_) => {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
-                "Use the Gigahorse FastFarmer to Farm Gigahorse Plots",
+                "Use the Gigahorse Harvester to Farm Gigahorse Plots",
             ))
         }
     };
