@@ -8,6 +8,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Install latest Stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.85.0
+          default: true
+          override: true
+          components: rustfmt, clippy
       - name: Checkout submodules
         run: git submodule update --init --recursive
       - name: Run Format
@@ -45,6 +52,13 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install latest Stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.85.0
+          default: true
+          override: true
+          components: rustfmt, clippy
       - name: Build binary
         run: cargo build --release
       - name: Save release archive
