@@ -1,7 +1,7 @@
+use crate::PROTOCOL_VERSION;
 use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
 use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvester, Harvesters};
-use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;

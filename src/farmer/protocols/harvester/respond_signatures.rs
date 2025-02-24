@@ -1,24 +1,27 @@
+use crate::PROTOCOL_VERSION;
 use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvesters, SignatureHandler};
-use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
-use blst::min_pk::AggregateSignature;
 use blst::BLST_ERROR;
+use blst::min_pk::AggregateSignature;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_core::blockchain::pool_target::PoolTarget;
 use dg_xch_core::blockchain::proof_of_space::{generate_plot_public_key, generate_taproot_sk};
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes96};
-use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
+use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend};
 use dg_xch_core::consensus::constants::ConsensusConstants;
+use dg_xch_core::constants::AUG_SCHEME_DST;
 use dg_xch_core::protocols::farmer::{DeclareProofOfSpace, SignedValues};
 use dg_xch_core::protocols::harvester::RespondSignatures;
 use dg_xch_core::protocols::{ChiaMessage, ProtocolMessageTypes};
+use dg_xch_core::traits::SizedBytes;
 use dg_xch_keys::{decode_puzzle_hash, parse_payout_address};
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -90,8 +93,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                     if let Some(computed_quality_string) = verify_and_get_quality_string(
                         &pospace,
                         self.constants,
-                        &response.challenge_hash,
-                        &response.sp_hash,
+                        response.challenge_hash,
+                        response.sp_hash,
                         peak_height,
                     ) {
                         if is_sp_signatures {
@@ -105,12 +108,10 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                             let local_pk = response.local_pk.into();
                             for (_, sk) in self.shared_state.farmer_private_keys.iter() {
                                 let pk = sk.sk_to_pk();
-                                if pk.to_bytes() == *response.farmer_pk.to_sized_bytes() {
+                                if pk.to_bytes() == response.farmer_pk.bytes() {
                                     let agg_pk =
                                         generate_plot_public_key(&local_pk, &pk, include_taproot)?;
-                                    if agg_pk.to_bytes()
-                                        != *pospace.plot_public_key.to_sized_bytes()
-                                    {
+                                    if agg_pk.to_bytes() != pospace.plot_public_key.bytes() {
                                         warn!(
                                             "Key Mismatch {:?} != {:?}",
                                             pospace.plot_public_key, agg_pk
@@ -206,6 +207,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         );
                                         return Ok(());
                                     }
+                                    let config = self.shared_state.data.config.read().await.clone();
                                     let (pool_target, pool_target_signature) = if let Some(
                                         pool_public_key,
                                     ) =
@@ -217,14 +219,16 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                             let pool_target = PoolTarget {
                                                 max_height: 0,
                                                 puzzle_hash: decode_puzzle_hash(
-                                                    &self.shared_state.data.config.payout_address,
+                                                    &config.payout_address,
                                                 )?,
                                             };
                                             let pool_target_signature =
                                                 sign(sk, &pool_target.to_bytes(PROTOCOL_VERSION));
                                             (Some(pool_target), Some(pool_target_signature))
                                         } else {
-                                            error!("Don't have the private key for the pool key used by harvester: {pool_public_key}");
+                                            error!(
+                                                "Don't have the private key for the pool key used by harvester: {pool_public_key}"
+                                            );
                                             return Ok(());
                                         }
                                     } else {
@@ -251,9 +255,9 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         {
                                             farmer_reward_address_override
                                         } else {
-                                            Bytes32::from(parse_payout_address(
-                                                &self.shared_state.data.config.payout_address,
-                                            )?)
+                                            Bytes32::from_str(&parse_payout_address(
+                                                &config.payout_address,
+                                            )?)?
                                         },
                                         pool_target,
                                         pool_signature: pool_target_signature
@@ -282,7 +286,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(PROTOCOL_VERSION),
+                                                .to_bytes(PROTOCOL_VERSION)
+                                                .into(),
                                             ))
                                             .await;
                                         debug!("Declaring Proof of Space: {:?}", request);
@@ -324,7 +329,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                             let local_pk = response.local_pk.into();
                             for (_, sk) in self.shared_state.farmer_private_keys.iter() {
                                 let pk = sk.sk_to_pk();
-                                if pk.to_bytes() == *response.farmer_pk.to_sized_bytes() {
+                                if pk.to_bytes() == response.farmer_pk.bytes() {
                                     let agg_pk =
                                         generate_plot_public_key(&local_pk, &pk, include_taproot)?;
                                     let (
@@ -454,7 +459,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(PROTOCOL_VERSION),
+                                                .to_bytes(PROTOCOL_VERSION)
+                                                .into(),
                                             ))
                                             .await;
                                         debug!("Sending Signed Values: {:?}", request);

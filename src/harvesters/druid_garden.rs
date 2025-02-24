@@ -1,11 +1,11 @@
+use crate::PROTOCOL_VERSION;
 use crate::farmer::{ExtendedFarmerSharedState, PathInfo, PlotInfo};
 use crate::harvesters::{FarmingKeys, Harvester, ProofHandler, SignatureHandler};
 use crate::metrics::Metrics;
-use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
 use blst::min_pk::{PublicKey, SecretKey};
 use dg_xch_core::blockchain::proof_of_space::{
-    calculate_pos_challenge, generate_plot_public_key, passes_plot_filter, ProofBytes, ProofOfSpace,
+    ProofBytes, ProofOfSpace, calculate_pos_challenge, generate_plot_public_key, passes_plot_filter,
 };
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::clvm::bls_bindings::sign_prepend;
@@ -21,7 +21,7 @@ use dg_xch_core::protocols::harvester::{
 use dg_xch_keys::master_sk_to_local_sk;
 use dg_xch_pos::plots::decompressor::DecompressorPool;
 use dg_xch_pos::plots::disk_plot::DiskPlot;
-use dg_xch_pos::plots::plot_reader::{read_all_plot_headers_async, PlotReader};
+use dg_xch_pos::plots::plot_reader::{PlotReader, read_all_plot_headers_async};
 use dg_xch_pos::verifier::proof_to_bytes;
 use dg_xch_serialize::ChiaSerialize;
 use futures_util::stream::FuturesUnordered;
@@ -32,8 +32,8 @@ use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::available_parallelism;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::Mutex;
@@ -113,9 +113,9 @@ impl Harvester for DruidGardenHarvester {
                 }
                 if passes_plot_filter(
                     data_arc.filter_prefix_bits,
-                    &plot_id,
-                    &data_arc.challenge_hash,
-                    &data_arc.sp_hash,
+                    plot_id,
+                    data_arc.challenge_hash,
+                    data_arc.sp_hash,
                 ) {
                     if plot_info.pool_public_key.is_some() {
                         plot_counts.og_passed.fetch_add(1, Ordering::Relaxed);
@@ -125,9 +125,9 @@ impl Harvester for DruidGardenHarvester {
                         plot_counts.pool_passed.fetch_add(1, Ordering::Relaxed);
                     }
                     let sp_challenge_hash = calculate_pos_challenge(
-                        &plot_id,
-                        &data_arc.challenge_hash,
-                        &data_arc.sp_hash,
+                        plot_id,
+                        data_arc.challenge_hash,
+                        data_arc.sp_hash,
                     );
                     debug!("Starting Search for challenge {sp_challenge_hash} in plot {}", path.file_name);
                     let qualities = match plot_info
@@ -164,10 +164,10 @@ impl Harvester for DruidGardenHarvester {
                             let start = metrics.qualities_latency.start_timer();
                             let required_iters = calculate_iterations_quality(
                                 constants_arc.difficulty_constant_factor,
-                                &quality,
+                                quality,
                                 k,
                                 dif,
-                                &data_arc.sp_hash,
+                                data_arc.sp_hash,
                             );
                             start.stop_and_record();
                             if let Ok(sp_interval_iters) =
@@ -269,12 +269,13 @@ impl Harvester for DruidGardenHarvester {
             }
         }
         let finished = start.stop_and_record();
-        info!(
-            "Finished Processing SP({}) in {:.3} seconds",
-            harvester_point.sp_hash, finished
+        debug!(
+            "Finished Processing SP({}/{}) in {:.3} seconds",
+            harvester_point.signage_point_index, harvester_point.sp_hash, finished
         );
         info!(
-            "Passed Filter - OG: {}/{}. NFT: {}/{}. Compressed: {}/{}. Proofs Found: {}. Partials Found: NFT({}), Compressed({})",
+            "Index: {}, Passed Filter - OG: {}/{}. NFT: {}/{}. Compressed: {}/{}. Proofs Found: {}. Partials Found: NFT({}), Compressed({}), Took: {:.3} seconds",
+            harvester_point.signage_point_index,
             plot_counts.og_passed.load(Ordering::Relaxed),
             plot_counts.og_total.load(Ordering::Relaxed),
             plot_counts.pool_passed.load(Ordering::Relaxed),
@@ -284,6 +285,7 @@ impl Harvester for DruidGardenHarvester {
             proofs.load(Ordering::Relaxed),
             nft_partials.load(Ordering::Relaxed),
             compressed_partials.load(Ordering::Relaxed),
+            finished
         );
         self.shared_state
             .data
@@ -349,7 +351,10 @@ impl Harvester for DruidGardenHarvester {
                 PlotHeader::GHv2_5(_) => {
                     return Err(Error::new(
                         ErrorKind::InvalidInput,
-                        format!("To Farm Gigahorse Plots you need to enable the Gigahorse Harvester: {}", file_name),
+                        format!(
+                            "To Farm Gigahorse Plots you need to enable the Gigahorse Harvester: {}",
+                            file_name
+                        ),
                     ));
                 }
             },
@@ -681,7 +686,10 @@ async fn load_plots(
             og_count += 1;
         }
     }
-    info!("Loaded {} og plots, {} pooling plots and {} compressed plots, failed to load {}, missing keys for {}", og_count, pool_count, compressed_count, failed_count, missing_keys_count);
+    info!(
+        "Loaded {} og plots, {} pooling plots and {} compressed plots, failed to load {}, missing keys for {}",
+        og_count, pool_count, compressed_count, failed_count, missing_keys_count
+    );
     Ok(plots)
 }
 
@@ -698,7 +706,7 @@ async fn load_headers(
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 "Use the Gigahorse Harvester to Farm Gigahorse Plots",
-            ))
+            ));
         }
     };
     if let Some(key) = &memo.pool_public_key {

@@ -1,19 +1,19 @@
 use crate::_version;
 use crate::cli::utils::get_device_id_path;
 use crate::farmer::ExtendedFarmerSharedState;
-use actix_web::web::{Data, Json, ServiceConfig};
-use actix_web::{get, Error, HttpResponse};
 use dg_xch_core::protocols::farmer::FarmerSharedState;
-use log::{debug, info};
+use log::info;
+use portfu::macros::get;
+use portfu::prelude::http::HeaderValue;
+use portfu::prelude::http::header::CONTENT_TYPE;
+use portfu::prelude::*;
 use prometheus::core::{
     AtomicU64, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec,
 };
 use prometheus::{Histogram, HistogramOpts, Opts, Registry, TextEncoder};
-use protobuf::Message;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -91,29 +91,32 @@ impl Default for Metrics {
             ])),
         )
         .expect("Expected To Create Default Metrics Registry");
+        Self::with_registry(metrics_registry)
+    }
+}
+impl Metrics {
+    pub fn with_registry(metrics_registry: Registry) -> Self {
+        let id = get_uuid().unwrap_or_else(|_| Uuid::new_v4());
         Self {
             id,
             blockchain_synced: Arc::new(
                 GenericGauge::new("blockchain_synced", "Is Upstream Node Synced")
-                    .map(|g: GenericGauge<AtomicU64>| {
+                    .inspect(|g: &GenericGauge<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
             blockchain_height: Arc::new(
                 GenericGauge::new("blockchain_height", "Blockchain Height")
-                    .map(|g: GenericGauge<AtomicU64>| {
+                    .inspect(|g: &GenericGauge<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
             blockchain_netspace: Arc::new(
                 GenericGauge::new("blockchain_netspace", "Current Netspace")
-                    .map(|g: GenericGauge<AtomicU64>| {
+                    .inspect(|g: &GenericGauge<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
@@ -124,9 +127,8 @@ impl Default for Metrics {
                 )
                 .buckets(LATENCY_BUCKETS.to_vec());
                 Histogram::with_opts(opts)
-                    .map(|h: Histogram| {
+                    .inspect(|h: &Histogram| {
                         metrics_registry.register(Box::new(h.clone())).unwrap_or(());
-                        h
                     })
                     .expect("Expected To Create Static Metrics")
             }),
@@ -137,9 +139,8 @@ impl Default for Metrics {
                 )
                 .buckets(LATENCY_BUCKETS.to_vec());
                 Histogram::with_opts(opts)
-                    .map(|h: Histogram| {
+                    .inspect(|h: &Histogram| {
                         metrics_registry.register(Box::new(h.clone())).unwrap_or(());
-                        h
                     })
                     .expect("Expected To Create Static Metrics")
             }),
@@ -150,9 +151,8 @@ impl Default for Metrics {
                 )
                 .buckets(SP_INTERVAL_BUCKETS.to_vec());
                 Histogram::with_opts(opts)
-                    .map(|h: Histogram| {
+                    .inspect(|h: &Histogram| {
                         metrics_registry.register(Box::new(h.clone())).unwrap_or(());
-                        h
                     })
                     .expect("Expected To Create Static Metrics")
             }),
@@ -163,9 +163,8 @@ impl Default for Metrics {
                 )
                 .buckets(LATENCY_BUCKETS.to_vec());
                 Histogram::with_opts(opts)
-                    .map(|h: Histogram| {
+                    .inspect(|h: &Histogram| {
                         metrics_registry.register(Box::new(h.clone())).unwrap_or(());
-                        h
                     })
                     .expect("Expected To Create Static Metrics")
             }),
@@ -176,9 +175,8 @@ impl Default for Metrics {
                 )
                 .buckets(PLOT_LOAD_LATENCY_BUCKETS.to_vec());
                 Histogram::with_opts(opts)
-                    .map(|h: Histogram| {
+                    .inspect(|h: &Histogram| {
                         metrics_registry.register(Box::new(h.clone())).unwrap_or(());
-                        h
                     })
                     .expect("Expected To Create Static Metrics")
             }),
@@ -187,57 +185,50 @@ impl Default for Metrics {
                     Opts::new("partials_submitted", "Total Partials Submitted"),
                     &["launcher_id"],
                 )
-                .map(|g: GenericCounterVec<AtomicU64>| {
+                .inspect(|g: &GenericCounterVec<AtomicU64>| {
                     metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                    g
                 })
                 .expect("Expected To Create Static Metrics"),
             ),
             total_proofs_found: Arc::new(
                 GenericCounter::new("total_proofs_found", "Total Proofs Found")
-                    .map(|g: GenericCounter<AtomicU64>| {
+                    .inspect(|g: &GenericCounter<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
             last_proofs_found: Arc::new(
                 GenericGauge::new("last_proofs_found", "Last Value of Proofs Found")
-                    .map(|g: GenericGauge<AtomicU64>| {
+                    .inspect(|g: &GenericGauge<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
             total_partials_found: Arc::new(
                 GenericCounter::new("total_partials_found", "Total Partials Found")
-                    .map(|g: GenericCounter<AtomicU64>| {
+                    .inspect(|g: &GenericCounter<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
             last_partials_found: Arc::new(
                 GenericGauge::new("last_partials_found", "Last Value of Partials Found")
-                    .map(|g: GenericGauge<AtomicU64>| {
+                    .inspect(|g: &GenericGauge<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
             total_passed_filter: Arc::new(
                 GenericCounter::new("total_passed_filter", "Total Plots Passed Filter")
-                    .map(|g: GenericCounter<AtomicU64>| {
+                    .inspect(|g: &GenericCounter<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
             last_passed_filter: Arc::new(
                 GenericGauge::new("last_passed_filter", "Last Value of Plots Passed Filter")
-                    .map(|g: GenericGauge<AtomicU64>| {
+                    .inspect(|g: &GenericGauge<AtomicU64>| {
                         metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                        g
                     })
                     .expect("Expected To Create Static Metrics"),
             ),
@@ -246,9 +237,8 @@ impl Default for Metrics {
                     Opts::new("plot_file_size", "Plots Loaded on Server"),
                     &["c_level", "k_size", "type"],
                 )
-                .map(|g: GenericGaugeVec<AtomicU64>| {
+                .inspect(|g: &GenericGaugeVec<AtomicU64>| {
                     metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                    g
                 })
                 .expect("Expected To Create Static Metrics"),
             ),
@@ -257,9 +247,8 @@ impl Default for Metrics {
                     Opts::new("plot_counts", "Plots Loaded on Server"),
                     &["c_level", "k_size", "type"],
                 )
-                .map(|g: GenericGaugeVec<AtomicU64>| {
+                .inspect(|g: &GenericGaugeVec<AtomicU64>| {
                     metrics_registry.register(Box::new(g.clone())).unwrap_or(());
-                    g
                 })
                 .expect("Expected To Create Static Metrics"),
             ),
@@ -268,16 +257,12 @@ impl Default for Metrics {
     }
 }
 
-pub fn init(cfg: &mut ServiceConfig) {
-    cfg.service(metrics);
-    cfg.service(bin_metrics);
-}
-
 #[get("/metrics")]
 pub async fn metrics(
-    state: Data<Arc<FarmerSharedState<ExtendedFarmerSharedState>>>,
-) -> Result<HttpResponse, Error> {
-    if let Some(farmer_metrics) = state.metrics.read().await.as_ref() {
+    state: State<Arc<FarmerSharedState<ExtendedFarmerSharedState>>>,
+    data: &mut ServiceData,
+) -> Result<String, Error> {
+    if let Some(farmer_metrics) = state.0.metrics.read().await.as_ref() {
         if let Some(uptime) = &farmer_metrics.uptime {
             uptime.set(
                 Instant::now()
@@ -286,53 +271,26 @@ pub async fn metrics(
             )
         }
     }
+    data.response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4"),
+    );
     let encoder = TextEncoder::new();
-    match encoder.encode_to_string(&state.data.extended_metrics.registry.read().await.gather()) {
-        Ok(enc) => Ok(HttpResponse::Ok().body(enc)),
-        Err(err) => {
-            debug!("Error in metrics: {:?}", err);
-            Ok(HttpResponse::InternalServerError().finish())
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct MetricsResp {
-    pub metrics: Vec<Vec<u8>>,
-}
-
-#[get("/metrics/bin")]
-pub async fn bin_metrics(
-    state: Data<Arc<FarmerSharedState<ExtendedFarmerSharedState>>>,
-) -> Result<Json<MetricsResp>, Error> {
-    if let Some(farmer_metrics) = state.metrics.read().await.as_ref() {
-        if let Some(uptime) = &farmer_metrics.uptime {
-            uptime.set(
-                Instant::now()
-                    .duration_since(*farmer_metrics.start_time)
-                    .as_secs(),
+    encoder
+        .encode_to_string(&state.0.data.extended_metrics.registry.read().await.gather())
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to Gather Metrics Data: {e:?}"),
             )
-        }
-    }
-    Ok(Json(MetricsResp {
-        metrics: state
-            .data
-            .extended_metrics
-            .registry
-            .read()
-            .await
-            .gather()
-            .into_iter()
-            .map(|m| m.write_to_bytes().unwrap_or_default())
-            .collect(),
-    }))
+        })
 }
 
-pub fn get_uuid() -> Result<Uuid, std::io::Error> {
+pub fn get_uuid() -> Result<Uuid, Error> {
     let uuid_path = get_device_id_path();
     if uuid_path.exists() {
         Uuid::parse_str(fs::read_to_string(uuid_path)?.as_str())
-            .map_err(|e| std::io::Error::new(ErrorKind::InvalidInput, e))
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, e))
     } else {
         info!("Creating UUID: {:?}", uuid_path);
         if let Some(p) = &uuid_path.parent() {
@@ -341,8 +299,8 @@ pub fn get_uuid() -> Result<Uuid, std::io::Error> {
         let uuid = Uuid::new_v4();
         match fs::write(&uuid_path, uuid.to_string().as_bytes()) {
             Ok(_) => Uuid::parse_str(fs::read_to_string(uuid_path)?.as_str())
-                .map_err(|e| std::io::Error::new(ErrorKind::InvalidInput, e)),
-            Err(e) => Err(std::io::Error::new(ErrorKind::InvalidInput, e)),
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, e)),
+            Err(e) => Err(Error::new(ErrorKind::InvalidInput, e)),
         }
     }
 }

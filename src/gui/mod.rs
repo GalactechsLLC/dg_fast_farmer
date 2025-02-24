@@ -1,13 +1,11 @@
-use actix_web::web::Data;
-use actix_web::{App, HttpServer};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use std::io::Error;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use ratatui::style::Stylize;
@@ -15,19 +13,20 @@ use ratatui::{prelude::*, widgets::*};
 
 use tui_logger::*;
 
-use crate::farmer::config::{load_keys, Config};
-use crate::farmer::{ExtendedFarmerSharedState, Farmer, GuiStats};
-use crate::metrics;
+use crate::farmer::{ExtendedFarmerSharedState, Farmer, PlotCounts};
+use crate::metrics::metrics;
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
-use chrono::prelude::*;
 use dg_xch_clients::api::pool::DefaultPoolClient;
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
-use dg_xch_core::protocols::farmer::FarmerSharedState;
-use log::{error, LevelFilter};
+use dg_xch_core::protocols::farmer::{FarmerSharedState, MostRecentSignagePoint};
+use log::{LevelFilter, error};
+use portfu::prelude::ServerBuilder;
 use sysinfo::System;
+use time::OffsetDateTime;
+use time::macros::format_description;
 use tokio::sync::Mutex;
-use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::task::{JoinHandle, spawn_blocking};
 use tokio::time::sleep;
 use tokio::{join, select};
 
@@ -68,24 +67,12 @@ pub struct FullNodeState {
     pub blockchain_state: BlockchainState,
 }
 
-pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
+pub async fn bootstrap(
+    shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+) -> Result<(), Error> {
     init_logger(LevelFilter::Info).unwrap();
     set_default_level(LevelFilter::Info);
     enable_raw_mode()?;
-    let (farmer_private_keys, owner_secret_keys, auth_secret_keys, pool_public_keys) =
-        load_keys(config.clone()).await;
-    let shared_state = Arc::new(FarmerSharedState {
-        farmer_private_keys: Arc::new(farmer_private_keys),
-        owner_secret_keys: Arc::new(owner_secret_keys),
-        owner_public_keys_to_auth_secret_keys: Arc::new(auth_secret_keys),
-        pool_public_keys: Arc::new(pool_public_keys),
-        data: Arc::new(ExtendedFarmerSharedState {
-            config: config.clone(),
-            run: Arc::new(AtomicBool::new(true)),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
@@ -107,23 +94,22 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
         Ok::<(), Error>(())
     });
     let fullnode_state = gui_state.clone();
-    let fullnode_thread = tokio::spawn(async move {
-        update_blockchain(config.clone(), fullnode_state.farmer_state.clone()).await
-    });
+    let fullnode_thread =
+        tokio::spawn(async move { update_blockchain(fullnode_state.farmer_state.clone()).await });
     let sys_info_gui_state = gui_state.clone();
     let sys_info_thread = tokio::spawn(async move {
         let mut system = System::new();
-        system.refresh_cpu();
+        system.refresh_cpu_all();
         system.refresh_memory();
         sleep(Duration::from_secs(3)).await;
-        system.refresh_cpu();
+        system.refresh_cpu_all();
         system.refresh_memory();
         loop {
             let results = spawn_blocking(move || {
-                system.refresh_cpu();
+                system.refresh_cpu_all();
                 system.refresh_memory();
                 let si = SysInfo {
-                    cpu_usage: system.global_cpu_info().cpu_usage() as u16,
+                    cpu_usage: system.global_cpu_usage() as u16,
                     ram_used: system.used_memory(),
                     ram_total: system.total_memory(),
                     swap_used: system.used_swap(),
@@ -149,19 +135,24 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     });
-    let metrics = shared_state.data.config.metrics.clone().unwrap_or_default();
+    let metrics_settings = shared_state
+        .data
+        .config
+        .read()
+        .await
+        .metrics
+        .clone()
+        .unwrap_or_default();
     let metrics_state = shared_state.clone();
-    let server_handle = if metrics.enabled {
+    let server_handle = if metrics_settings.enabled {
         tokio::spawn(async move {
-            let server_state = metrics_state.clone();
             select! {
-                _ = HttpServer::new(move || {
-                        App::new()
-                            .app_data(Data::new(server_state.clone()))
-                            .configure(metrics::init)
-                    })
-                    .bind(("0.0.0.0", metrics.port))?
-                    .run()
+                _ = ServerBuilder::default()
+                    .host("0.0.0.0".to_string())
+                    .port(metrics_settings.port)
+                    .shared_state(metrics_state.clone())
+                    .register(metrics)
+                    .build().run()
                 => {
                     Ok(())
                 }
@@ -170,6 +161,7 @@ pub async fn bootstrap(config: Arc<Config>) -> Result<(), Error> {
                         if !metrics_state.data.run.load(Ordering::Relaxed) {
                             break;
                         }
+                        tokio::time::sleep(Duration::from_millis(10)).await
                     }
                 } => {
                     Ok(())
@@ -217,8 +209,9 @@ async fn run_gui<B: Backend>(
 ) -> std::io::Result<()> {
     loop {
         {
-            let farmer_state = gui_state.farmer_state.data.gui_stats.read().await.clone();
+            let farmer_state = gui_state.farmer_state.data.plot_counts.clone();
             let sys_info = *gui_state.system_info.lock().await;
+            let most_recent_sp = *gui_state.farmer_state.most_recent_sp.read().await;
             let fullnode_state = gui_state
                 .farmer_state
                 .data
@@ -226,7 +219,7 @@ async fn run_gui<B: Backend>(
                 .read()
                 .await
                 .clone();
-            terminal.draw(|f| ui(f, farmer_state, fullnode_state, sys_info))?;
+            terminal.draw(|f| ui(f, farmer_state, fullnode_state, most_recent_sp, &sys_info))?;
         }
         if event::poll(Duration::from_millis(25))? {
             if let Event::Key(event) = event::read()? {
@@ -260,11 +253,12 @@ async fn run_gui<B: Backend>(
 
 fn ui(
     f: &mut Frame,
-    farmer_state: GuiStats,
+    plot_counts: Arc<PlotCounts>,
     fullnode_state: Option<FullNodeState>,
-    sys_info: SysInfo,
+    most_recent_sp: MostRecentSignagePoint,
+    sys_info: &SysInfo,
 ) {
-    let size = f.size();
+    let size = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(100)].as_ref())
@@ -299,11 +293,16 @@ fn ui(
              \t  Plot Count: {:#?}\n\
              \t  Total Space: {} ({:#?})\n\
              \t  Most Recent Signage Point: \n    {:#?} ({:#?})",
-            farmer_state.total_plot_count,
-            bytefmt::format_to(farmer_state.total_plot_space, bytefmt::Unit::TIB),
-            farmer_state.total_plot_space,
-            farmer_state.most_recent_sp.0,
-            farmer_state.most_recent_sp.1,
+            plot_counts.og_plot_count.load(Ordering::Relaxed)
+                + plot_counts.nft_plot_count.load(Ordering::Relaxed)
+                + plot_counts.compresses_plot_count.load(Ordering::Relaxed),
+            bytefmt::format_to(
+                plot_counts.total_plot_space.load(Ordering::Relaxed),
+                bytefmt::Unit::TIB
+            ),
+            plot_counts.total_plot_space.load(Ordering::Relaxed),
+            most_recent_sp.hash,
+            most_recent_sp.index,
         )
     };
 
@@ -327,8 +326,10 @@ fn ui(
         mempool_size = full_node.blockchain_state.mempool_size;
     }
     let formatted_timestamp: String = if timestamp != 0 {
-        let datetime = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_default();
-        datetime.format("%d-%m-%Y %H:%M:%S").to_string()
+        let datetime = OffsetDateTime::from_unix_timestamp(timestamp as i64)
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let format = format_description!("[day]-[month]-[year] [hour]:[minute]:[second]");
+        datetime.format(&format).unwrap_or(format!("{datetime}"))
     } else {
         "N/A".to_string()
     };

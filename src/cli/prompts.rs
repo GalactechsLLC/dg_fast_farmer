@@ -1,8 +1,9 @@
 use bip39::Mnemonic;
-use dg_xch_core::blockchain::sized_bytes::{prep_hex_str, Bytes32};
+use dg_xch_core::blockchain::sized_bytes::Bytes32;
+use dg_xch_core::formatting::prep_hex_str;
 use dg_xch_keys::parse_payout_address;
-use dialoguer::theme::ColorfulTheme;
 use dialoguer::Input;
+use dialoguer::theme::ColorfulTheme;
 use hex::decode;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -68,14 +69,14 @@ pub fn prompt_for_payout_address(current: Option<String>) -> Result<Bytes32, Err
             if input.trim().is_empty() && current.is_some() {
                 current
                     .map(|v| {
-                        Bytes32::from(
-                            parse_payout_address(&v)
+                        Bytes32::from_str(
+                            &parse_payout_address(&v)
                                 .unwrap_or_else(|_| panic!("{input} Not a valid Payout Address")),
                         )
                     })
                     .expect("Just Checked Is Some")
             } else {
-                Bytes32::from(parse_payout_address(&input).expect("Checked In Validator"))
+                Bytes32::from_str(&parse_payout_address(&input).expect("Checked In Validator"))
             }
         })
         .map_err(|e| {
@@ -83,7 +84,7 @@ pub fn prompt_for_payout_address(current: Option<String>) -> Result<Bytes32, Err
                 ErrorKind::InvalidInput,
                 format!("Failed to read user Input for XCH Address: {e:?}"),
             )
-        })
+        })?
 }
 
 pub fn prompt_for_launcher_id(current: Option<Bytes32>) -> Result<Option<Bytes32>, Error> {
@@ -109,7 +110,7 @@ pub fn prompt_for_launcher_id(current: Option<Bytes32>) -> Result<Option<Bytes32
             if input.trim().is_empty() {
                 current
             } else {
-                Some(Bytes32::from(input))
+                Bytes32::from_str(&input).ok()
             }
         })
         .map_err(|e| {
@@ -122,7 +123,9 @@ pub fn prompt_for_launcher_id(current: Option<Bytes32>) -> Result<Option<Bytes32
 
 pub fn prompt_for_farming_fullnode(current: Option<String>) -> Result<String, Error> {
     let prompt = if let Some(current) = &current {
-        format!("Please select Node for Farming, \"community\" or a custom IP/Domain, leave blank to continue Using {current}: ")
+        format!(
+            "Please select Node for Farming, \"community\" or a custom IP/Domain, leave blank to continue Using {current}: "
+        )
     } else {
         String::from("Please select Node for Farming, \"community\" or a custom IP/Domain:")
     };
@@ -154,7 +157,7 @@ pub fn prompt_for_farming_fullnode(current: Option<String>) -> Result<String, Er
             } else if ["l", "localhost"].contains(&input.as_str()) {
                 String::from("localhost")
             } else if ["c", "community"].contains(&input.as_str()) {
-                String::from("chia-proxy.evergreenminer-prod.com")
+                String::from("druid.garden")
             } else {
                 input.trim().to_string()
             }
@@ -169,7 +172,9 @@ pub fn prompt_for_farming_fullnode(current: Option<String>) -> Result<String, Er
 
 pub fn prompt_for_rpc_fullnode(current: Option<String>) -> Result<String, Error> {
     let prompt = if let Some(current) = &current {
-        format!("Please Select Your Node for RPC Calls (community/local), leave blank to continue Using {current}: ")
+        format!(
+            "Please Select Your Node for RPC Calls (community/local), leave blank to continue Using {current}: "
+        )
     } else {
         String::from("Please Select Your Node for RPC Calls (community/local): ")
     };
@@ -201,7 +206,7 @@ pub fn prompt_for_rpc_fullnode(current: Option<String>) -> Result<String, Error>
             } else if ["l", "localhost"].contains(&input.as_str()) {
                 String::from("localhost")
             } else if ["c", "community"].contains(&input.as_str()) {
-                String::from("chia-proxy.evergreenminer-prod.com")
+                String::from("druid.garden")
             } else {
                 input.trim().to_string()
             }
@@ -236,10 +241,8 @@ pub fn prompt_for_farming_port(current: Option<u16>) -> Result<u16, Error> {
         .map(|input| {
             if !input.trim().is_empty() {
                 u16::from_str(&input).expect("Was Validated in the validate_with call")
-            } else if let Some(current) = current {
-                current
             } else {
-                0 //Should Never Hit This
+                current.unwrap_or_default()
             }
         })
         .map_err(|e| {
@@ -272,10 +275,8 @@ pub fn prompt_for_rpc_port(current: Option<u16>) -> Result<u16, Error> {
         .map(|input| {
             if !input.trim().is_empty() {
                 u16::from_str(&input).expect("Was Validated in the validate_with call")
-            } else if let Some(current) = current {
-                current
             } else {
-                0 //Should Never Hit This
+                current.unwrap_or_default()
             }
         })
         .map_err(|e| {
@@ -323,7 +324,11 @@ pub fn prompt_for_ssl_path(current: Option<String>) -> Result<Option<String>, Er
         })
 }
 
-pub fn prompt_for_mnemonic<P: AsRef<Path>>(path: Option<P>) -> Result<Mnemonic, Error> {
+pub fn prompt_for_mnemonic<P: AsRef<Path>>(
+    path: Option<P>,
+    mnemonic_str: Option<String>,
+    use_prompts: bool,
+) -> Result<Mnemonic, Error> {
     if let Some(mnemonic_file) = path {
         Mnemonic::from_str(
             &fs::read_to_string(mnemonic_file)
@@ -335,7 +340,14 @@ pub fn prompt_for_mnemonic<P: AsRef<Path>>(path: Option<P>) -> Result<Mnemonic, 
                 format!("Failed to parse Mnemonic: {e:?}"),
             )
         })
-    } else {
+    } else if let Some(mnemonic_str) = mnemonic_str {
+        Mnemonic::from_str(&mnemonic_str).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("Failed to parse Mnemonic: {e:?}"),
+            )
+        })
+    } else if use_prompts {
         Mnemonic::from_str(
             &Input::<String>::with_theme(&ColorfulTheme::default())
                 .with_prompt("Please Input Your Mnemonic: ")
@@ -360,6 +372,8 @@ pub fn prompt_for_mnemonic<P: AsRef<Path>>(path: Option<P>) -> Result<Mnemonic, 
                 format!("Failed to parse Mnemonic: {e:?}"),
             )
         })
+    } else {
+        Err(Error::new(ErrorKind::InvalidInput, "No Mnemonic Provided"))
     }
 }
 

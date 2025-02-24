@@ -1,20 +1,20 @@
+use crate::PROTOCOL_VERSION;
 use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
 use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
 use crate::harvesters::{Harvester, Harvesters};
-use crate::PROTOCOL_VERSION;
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_core::blockchain::proof_of_space::calculate_prefix_bits;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::consensus::constants::ConsensusConstants;
-use dg_xch_core::consensus::pot_iterations::POOL_SUB_SLOT_ITERS;
+use dg_xch_core::constants::POOL_SUB_SLOT_ITERS;
 use dg_xch_core::protocols::farmer::{FarmerPoolState, NewSignagePoint};
 use dg_xch_core::protocols::harvester::{NewSignagePointHarvester, PoolDifficulty};
 use dg_xch_core::protocols::{ChiaMessage, MessageHandler, PeerMap};
 use dg_xch_serialize::ChiaSerialize;
-use log::{debug, error, info, warn};
-use std::collections::hash_map::Entry;
+use log::{debug, error, warn};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::{Cursor, Error};
 use std::sync::Arc;
 use std::time::Instant;
@@ -55,19 +55,24 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
                     debug!("Self Pooling Detected for {p2_singleton_puzzle_hash}");
                     continue;
                 } else if let Some(difficulty) = pool_dict.current_difficulty {
-                    debug!("Using Difficulty {difficulty} for p2_singleton_puzzle_hash: {p2_singleton_puzzle_hash}");
+                    debug!(
+                        "Using Difficulty {difficulty} for p2_singleton_puzzle_hash: {p2_singleton_puzzle_hash}"
+                    );
                     pool_difficulties.push(PoolDifficulty {
                         difficulty,
                         sub_slot_iters: POOL_SUB_SLOT_ITERS,
                         pool_contract_puzzle_hash: *p2_singleton_puzzle_hash,
                     })
                 } else {
-                    warn!("No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this signage point, pool: {}", &config.pool_url);
+                    warn!(
+                        "No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this signage point, pool: {}",
+                        &config.pool_url
+                    );
                     continue;
                 }
             }
         }
-        info!(
+        debug!(
             "New Signage Point({}): {:?}",
             sp.signage_point_index, sp.challenge_hash
         );
@@ -96,12 +101,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             .write()
             .await
             .insert(sp_hash, Instant::now());
-        self.shared_state
-            .data
-            .gui_stats
-            .write()
-            .await
-            .most_recent_sp = (sp.challenge_hash, sp.signage_point_index);
+        *self.shared_state.data.most_recent_sp.write().await =
+            (sp.challenge_hash, sp.signage_point_index);
         match self.signage_points.write().await.entry(sp_hash) {
             Entry::Occupied(mut e) => {
                 e.get_mut().push(sp);
