@@ -62,7 +62,7 @@ jobs:
       - name: Build binary
         run: cargo build --release
       - name: Save release archive
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ff-x86_64-${{ matrix.package-suffix }}
           path: target/release/${{ matrix.binary-name }}
