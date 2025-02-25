@@ -181,7 +181,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                                 handshake.software_version
                             );
                         } else {
-                            error!("Failed to read chia versio0n from client handshake");
+                            error!("Failed to read chia version from client handshake");
                         }
                         if let Err(e) = s.attach_client_handlers(&s.shared_state, &mut c).await {
                             error!("Failed to attach socket listeners: {:?}", e);
