@@ -1,4 +1,3 @@
-use crate::farmer::ExtendedFarmerSharedState;
 use crate::farmer::config::Config;
 use crate::{HEADERS, PROTOCOL_VERSION};
 use blst::min_pk::SecretKey;
@@ -30,28 +29,27 @@ const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
 const UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL: u64 = 120;
 const UPDATE_POOL_FARMER_INFO_INTERVAL: u64 = 300;
 
-pub async fn pool_updater(shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>) {
+pub async fn pool_updater<T, C>(shared_state: Arc<FarmerSharedState<T>>, config: Arc<RwLock<Config<C>>>) {
     let mut last_update = Instant::now();
     let mut first = true;
     let pool_client = Arc::new(DefaultPoolClient::new());
     loop {
-        let config = shared_state.data.config.read().await.clone();
-        if !shared_state.data.run.load(Ordering::Relaxed) {
+        if !shared_state.signal.load(Ordering::Relaxed) {
             break;
         } else if first
-            || shared_state.data.force_pool_update.load(Ordering::Relaxed)
+            || shared_state.force_pool_update.load(Ordering::Relaxed)
             || Instant::now().duration_since(last_update).as_secs() >= 60
         {
             debug!("Updating Pool State");
             if let Err(e) =
-                update_pool_state(pool_client.clone(), config.clone(), shared_state.clone()).await
+                update_pool_state(pool_client.clone(), &*config.read().await, shared_state.clone()).await
             {
                 error!("Error updating Pool State: {}", e);
                 tokio::time::sleep(Duration::from_secs(10)).await;
             } else {
                 first = false;
                 last_update = Instant::now();
-                shared_state.data.last_pool_update.store(
+                shared_state.last_pool_update.store(
                     SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .expect("System Time should be Greater than Epoch")
@@ -59,7 +57,6 @@ pub async fn pool_updater(shared_state: Arc<FarmerSharedState<ExtendedFarmerShar
                     Ordering::Relaxed,
                 );
                 shared_state
-                    .data
                     .force_pool_update
                     .store(false, Ordering::Relaxed);
             }
@@ -223,14 +220,14 @@ pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
         .await
 }
 
-pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
+pub async fn update_pool_farmer_info<T, P: PoolClient + Sized + Sync + Send>(
     pool_states: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
     pool_config: &PoolWalletConfig,
     authentication_token_timeout: u8,
     authentication_sk: &SecretKey,
-    client: Arc<T>,
+    client: Arc<P>,
     headers: HashMap<String, String>,
-    shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+    shared_state: Arc<FarmerSharedState<T>>,
 ) -> Result<GetFarmerResponse, PoolError> {
     let response = get_farmer(
         pool_config,
@@ -297,15 +294,15 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
     Ok(response)
 }
 
-pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
-    client: Arc<T>,
-    config: Arc<Config>,
-    shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+pub async fn update_pool_state<'a, T, C, P: 'a + PoolClient + Sized + Sync + Send>(
+    client: Arc<P>,
+    config: &Config<C>,
+    shared_state: Arc<FarmerSharedState<T>>,
 ) -> Result<(), Error> {
     let auth_keys = shared_state.owner_public_keys_to_auth_secret_keys.as_ref();
     let owner_keys = shared_state.owner_secret_keys.as_ref();
     let pool_states = shared_state.pool_states.clone();
-    let headers = shared_state.data.additional_headers.as_ref().clone();
+    let headers = shared_state.additional_headers.as_ref().clone();
     for pool_config in &config.pool_info {
         if let (Some(owner_secret_key), Some(auth_secret_key)) = (
             owner_keys.get(&pool_config.owner_public_key),

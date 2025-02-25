@@ -1,16 +1,21 @@
 use crate::cli::utils::rpc_client_from_config;
-use crate::farmer::ExtendedFarmerSharedState;
-use crate::gui::FullNodeState;
 use dg_xch_clients::api::full_node::FullnodeAPI;
 use dg_xch_core::protocols::farmer::FarmerSharedState;
 use log::error;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+use crate::farmer::config::Config;
+use crate::gui::{FullNodeState, GuiState};
 
-pub async fn update_blockchain(farmer_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>) {
-    let config = farmer_state.data.config.read().await.clone();
-    let mut full_node_rpc_res = rpc_client_from_config(config.as_ref(), &None);
+pub async fn update_blockchain<T, C>(
+    farmer_state: Arc<FarmerSharedState<T>>,
+    gui_state: Option<Arc<GuiState<T>>>,
+    config: Arc<RwLock<Config<C>>>
+) {
+    let config = config.read().await;
+    let mut full_node_rpc_res = rpc_client_from_config(&*config, &None);
     let mut last_update = Instant::now();
     loop {
         let full_node_rpc = match &full_node_rpc_res {
@@ -18,7 +23,7 @@ pub async fn update_blockchain(farmer_state: Arc<FarmerSharedState<ExtendedFarme
             Err(_) => {
                 error!("Failed to Connect FullNode RPC. Trying again in 10 seconds.");
                 tokio::time::sleep(Duration::from_secs(10)).await;
-                full_node_rpc_res = rpc_client_from_config(config.as_ref(), &None);
+                full_node_rpc_res = rpc_client_from_config(&*config, &None);
                 continue;
             }
         };
@@ -27,31 +32,29 @@ pub async fn update_blockchain(farmer_state: Arc<FarmerSharedState<ExtendedFarme
             let bc_state = full_node_rpc.get_blockchain_state().await;
             match bc_state {
                 Ok(bc_state) => {
-                    farmer_state
-                        .data
-                        .extended_metrics
-                        .blockchain_height
-                        .set(bc_state.peak.as_ref().map(|p| p.height).unwrap_or_default() as u64);
-                    farmer_state
-                        .data
-                        .extended_metrics
-                        .blockchain_synced
-                        .set(bc_state.sync.synced as u64);
-                    farmer_state
-                        .data
-                        .extended_metrics
-                        .blockchain_netspace
-                        .set((bc_state.space / 1024u128 / 1024u128 / 1024u128) as u64); //Convert to GiB for better fitting into u64
-                    *farmer_state.data.fullnode_state.write().await = Some(FullNodeState {
-                        blockchain_state: bc_state,
-                    });
+                    if let Some(metrics) = &*farmer_state.metrics.read().await {
+                        metrics
+                            .blockchain_height
+                            .set(bc_state.peak.as_ref().map(|p| p.height).unwrap_or_default() as u64);
+                        metrics
+                            .blockchain_synced
+                            .set(bc_state.sync.synced as u64);
+                        metrics
+                            .blockchain_netspace
+                            .set((bc_state.space / 1024u128 / 1024u128 / 1024u128) as u64); //Convert to GiB for better fitting into u64
+                    }
+                    if let Some(gui_state) = &gui_state {
+                        *gui_state.full_node_state.write().await = FullNodeState {
+                            blockchain_state: bc_state,
+                        };
+                    }
                 }
                 Err(e) => {
                     error!("{:?}", e);
                 }
             }
         }
-        if !farmer_state.data.run.load(Ordering::Relaxed) {
+        if !farmer_state.signal.load(Ordering::Relaxed) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;

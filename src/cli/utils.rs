@@ -1,9 +1,8 @@
 use crate::farmer::config::Config;
-use crate::farmer::{CA_PRIVATE_CRT, ExtendedFarmerSharedState, PRIVATE_CRT, PRIVATE_KEY};
+use crate::farmer::{CA_PRIVATE_CRT, PRIVATE_CRT, PRIVATE_KEY};
 use dg_xch_clients::ClientSSLConfig;
 use dg_xch_clients::rpc::full_node::FullnodeClient as RpcClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
-use dg_xch_core::protocols::farmer::FarmerSharedState;
 use dg_xch_core::ssl::load_certs_from_bytes;
 use dg_xch_core::traits::SizedBytes;
 use dg_xch_core::utils::hash_256;
@@ -14,6 +13,7 @@ use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub(crate) fn get_root_path() -> PathBuf {
     let prefix = home_dir().unwrap_or(Path::new("/").to_path_buf());
@@ -30,7 +30,7 @@ pub(crate) fn get_device_id_path() -> PathBuf {
     get_root_path().as_path().join(Path::new("device_id.bin"))
 }
 
-pub fn get_ssl_root_path(config: &Config) -> PathBuf {
+pub fn get_ssl_root_path<C>(config: &Config<C>) -> PathBuf {
     if let Some(ssl_root_path) = &config.ssl_root_path {
         PathBuf::from(ssl_root_path)
     } else {
@@ -38,8 +38,8 @@ pub fn get_ssl_root_path(config: &Config) -> PathBuf {
     }
 }
 
-pub(crate) fn rpc_client_from_config(
-    config: &Config,
+pub(crate) fn rpc_client_from_config<C>(
+    config: &Config<C>,
     headers: &Option<HashMap<String, String>>,
 ) -> Result<Arc<RpcClient>, Error> {
     Ok(Arc::new(RpcClient::new(
@@ -68,11 +68,13 @@ pub(crate) fn rpc_client_from_config(
     )?))
 }
 
-pub async fn load_client_id(
-    shared_state: &FarmerSharedState<ExtendedFarmerSharedState>,
+pub async fn load_client_id<C>(
+    config: Arc<RwLock<Config<C>>>,
 ) -> Result<Bytes32, Error> {
-    let config = shared_state.data.config.read().await.clone();
-    let ssl_path = get_ssl_root_path(&config).join(Path::new(crate::farmer::HARVESTER_CRT));
+    let ssl_path = {
+        let config = config.read().await;
+        get_ssl_root_path(&*config).join(Path::new(crate::farmer::HARVESTER_CRT))
+    };
     let cert_bytes = tokio::fs::read(&ssl_path).await?;
     let cert_chain = load_certs_from_bytes(&cert_bytes)?;
     let cert = cert_chain.first().ok_or(Error::new(
@@ -82,7 +84,7 @@ pub async fn load_client_id(
     Ok(Bytes32::new(hash_256(cert)))
 }
 
-pub fn is_community_node(config: &Config) -> bool {
+pub fn is_community_node<C>(config: &Config<C>) -> bool {
     ["druid.garden", "dev.druid.garden"]
         .contains(&config.fullnode_rpc_host.to_ascii_lowercase().trim())
 }

@@ -1,6 +1,6 @@
 use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
-use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState, load_client_id};
-use crate::harvesters::{Harvester, Harvesters, ProofHandler, SignatureHandler};
+use crate::farmer::{FarmerSharedState, load_client_id};
+use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
 use crate::{HEADERS, PROTOCOL_VERSION};
 use async_trait::async_trait;
 use blst::BLST_ERROR;
@@ -33,17 +33,32 @@ use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
+use tokio::sync::RwLock;
+use dg_xch_clients::websocket::farmer::FarmerClient;
+use crate::farmer::config::Config;
 
-pub struct NewProofOfSpaceHandle<T: PoolClient + Sized + Sync + Send + 'static> {
-    pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+pub struct NewProofOfSpaceHandle<P, T, H, C> where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static,
+{
+    pub pool_client: Arc<P>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
     pub harvester_id: Bytes32,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
+    pub harvesters: Arc<HashMap<Bytes32, Arc<H>>>,
     pub constants: &'static ConsensusConstants,
+    pub config: Arc<RwLock<Config<C>>>,
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>
 }
 
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfSpaceHandle<T> {
+impl<P, T, H, C> ProofHandler for NewProofOfSpaceHandle<P, T, H, C> where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static
+{
     async fn handle_proof(&self, new_pos: NewProofOfSpace) -> Result<(), Error> {
         debug!("Got NewProofOfSpace, Searching for SP: {}", new_pos.sp_hash);
         if let Some(sps) = self
@@ -144,7 +159,12 @@ fn format_big_number(number: u32) -> String {
         .join(",")
 }
 
-impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
+impl<P, T, H, C> NewProofOfSpaceHandle<P, T, H, C> where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static
+{
     async fn _handle_proof(&self, sp: &NewSignagePoint, qs: &Bytes32, new_pos: &NewProofOfSpace) {
         match self
             .shared_state
@@ -193,6 +213,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
             harvester_id: self.harvester_id,
             harvesters: self.harvesters.clone(),
             constants: self.constants,
+            config: self.config.clone(),
+            client: self.client.clone(),
         };
         let sp_src_data = {
             if new_pos.include_source_signature_data
@@ -245,12 +267,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
         if let Some(h) = self.harvesters.get(&self.harvester_id) {
             let harvester = h.clone();
             tokio::spawn(async move {
-                match harvester.as_ref() {
-                    Harvesters::DruidGarden(harvester) => {
-                        if let Err(e) = harvester.request_signatures(request, sig_handle).await {
-                            error!("Error Requesting Signature: {}", e);
-                        }
-                    }
+                if let Err(e) = harvester.request_signatures(request, sig_handle).await {
+                    error!("Error Requesting Signature: {}", e);
                 }
             });
         }
@@ -339,14 +357,13 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
             );
             return Ok(());
         };
-        let shared_state = self.shared_state.clone();
         let payload = PostPartialPayload {
             launcher_id,
             authentication_token: get_current_authentication_token(auth_token_timeout),
             proof_of_space: new_pos.proof.clone(),
             sp_hash: new_pos.sp_hash,
             end_of_sub_slot: new_pos.signage_point_index == 0,
-            harvester_id: load_client_id(shared_state.as_ref()).await?,
+            harvester_id: load_client_id::<C>(self.config.clone()).await?,
         };
         let payload_bytes = hash_256(payload.to_bytes(PROTOCOL_VERSION));
         let sp_src_data = {
@@ -382,12 +399,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
         if let Some(h) = self.harvesters.get(&self.harvester_id) {
             let harvester = h.clone();
             tokio::spawn(async move {
-                match harvester.as_ref() {
-                    Harvesters::DruidGarden(h) => {
-                        if let Err(e) = h.request_signatures(request, handler).await {
-                            error!("Error Requesting Signature: {}", e);
-                        }
-                    }
+                if let Err(e) = harvester.request_signatures(request, handler).await {
+                    error!("Error Requesting Signature: {}", e);
                 }
             });
         } else {
@@ -397,9 +410,9 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
     }
 }
 
-pub struct FullProofHandler<T: PoolClient + Sized + Sync + Send + 'static> {
-    pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+pub struct FullProofHandler<T: Sync + Send + 'static, P: PoolClient + Sized + Sync + Send + 'static> {
+    pub pool_client: Arc<P>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
     pub auth_token_timeout: u8,
     pub p2_singleton_puzzle_hash: Bytes32,
     pub new_pos: NewProofOfSpace,
@@ -407,9 +420,9 @@ pub struct FullProofHandler<T: PoolClient + Sized + Sync + Send + 'static> {
     pub payload_bytes: Vec<u8>,
 }
 
-pub struct PartialHandler<T: PoolClient + Sized + Sync + Send + 'static> {
-    pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+pub struct PartialHandler<T: Sync + Send + 'static, P: PoolClient + Sized + Sync + Send + 'static> {
+    pub pool_client: Arc<P>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
     pub auth_token_timeout: u8,
     pub p2_singleton_puzzle_hash: Bytes32,
     pub new_pos: NewProofOfSpace,
@@ -418,7 +431,7 @@ pub struct PartialHandler<T: PoolClient + Sized + Sync + Send + 'static> {
     pub pool_dif: u64,
 }
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for PartialHandler<T> {
+impl<T: Sync + Send + 'static, P: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for PartialHandler<T, P> {
     async fn handle_signature(&self, respond_sigs: RespondSignatures) -> Result<(), Error> {
         let response_msg_sig = if let Some(f) = respond_sigs.message_signatures.first() {
             Signature::from_bytes(&f.1.bytes())
@@ -524,29 +537,27 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                 if let Some(r) = self.shared_state.metrics.read().await.as_ref() {
                     use std::time::Duration;
                     let now = Instant::now();
-                    if let Some(c) = &r.points_found_24h {
-                        if let Some(v) = self
-                            .shared_state
-                            .pool_states
-                            .write()
-                            .await
-                            .get_mut(&self.p2_singleton_puzzle_hash)
-                        {
-                            c.with_label_values(&[&self.p2_singleton_puzzle_hash.to_string()])
-                                .set(
-                                    v.points_found_24h
-                                        .iter()
-                                        .filter(|v| {
-                                            now.duration_since(v.0)
-                                                < Duration::from_secs(60 * 60 * 24)
-                                        })
-                                        .map(|v| v.1)
-                                        .sum(),
-                                )
-                        }
+                    if let Some(v) = self
+                        .shared_state
+                        .pool_states
+                        .write()
+                        .await
+                        .get_mut(&self.p2_singleton_puzzle_hash)
+                    {
+                        r.points_found_24h.with_label_values(&[&self.p2_singleton_puzzle_hash.to_string()])
+                            .set(
+                                v.points_found_24h
+                                    .iter()
+                                    .filter(|v| {
+                                        now.duration_since(v.0)
+                                            < Duration::from_secs(60 * 60 * 24)
+                                    })
+                                    .map(|v| v.1)
+                                    .sum(),
+                            )
                     }
                 }
-                let mut headers = self.shared_state.data.additional_headers.as_ref().clone();
+                let mut headers = self.shared_state.additional_headers.as_ref().clone();
                 if let Some(v) = &*self.shared_state.upstream_handshake.read().await {
                     headers.insert(String::from("X-chia-version"), v.software_version.clone());
                     headers.insert(
@@ -591,7 +602,6 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                                 "Partial not good enough, forcing pool farmer update to get our current difficulty."
                             );
                             self.shared_state
-                                .data
                                 .force_pool_update
                                 .store(true, Ordering::Relaxed);
                         }

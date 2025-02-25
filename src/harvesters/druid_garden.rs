@@ -1,7 +1,6 @@
 use crate::PROTOCOL_VERSION;
-use crate::farmer::{ExtendedFarmerSharedState, PathInfo, PlotInfo};
-use crate::harvesters::{FarmingKeys, Harvester, ProofHandler, SignatureHandler};
-use crate::metrics::Metrics;
+use crate::farmer::{PathInfo, PlotInfo};
+use crate::harvesters::{count_plots, FarmingKeys, Harvester, ProofHandler, SignatureHandler};
 use async_trait::async_trait;
 use blst::min_pk::{PublicKey, SecretKey};
 use dg_xch_core::blockchain::proof_of_space::{
@@ -14,7 +13,7 @@ use dg_xch_core::consensus::pot_iterations::{
     calculate_iterations_quality, calculate_sp_interval_iters,
 };
 use dg_xch_core::plots::PlotHeader;
-use dg_xch_core::protocols::farmer::FarmerSharedState;
+use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState};
 use dg_xch_core::protocols::harvester::{
     NewProofOfSpace, NewSignagePointHarvester, RequestSignatures, RespondSignatures,
 };
@@ -32,12 +31,14 @@ use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::available_parallelism;
 use std::time::{Duration, Instant, SystemTime};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::timeout;
+use crate::cli::utils::load_client_id;
+use crate::farmer::config::Config;
 
 #[derive(Default)]
 pub struct PlotCounts {
@@ -49,7 +50,7 @@ pub struct PlotCounts {
     pub compressed_total: Arc<AtomicU64>,
 }
 
-pub struct DruidGardenHarvester {
+pub struct DruidGardenHarvester<T: Send + Sync + 'static> {
     pub plots: Arc<Mutex<HashMap<PathInfo, Arc<PlotInfo>>>>,
     pub plot_dirs: Arc<Vec<PathBuf>>,
     pub decompressor_pool: Arc<DecompressorPool>,
@@ -58,24 +59,78 @@ pub struct DruidGardenHarvester {
     pub selected_network: String,
     pub uuid: Bytes32,
     pub client_id: Bytes32,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
 }
 #[async_trait]
-impl Harvester for DruidGardenHarvester {
-    async fn new_signage_point<T>(
+impl<T: Send + Sync + 'static, C: Send + Sync + 'static> Harvester<T, C> for DruidGardenHarvester<T> {
+    async fn load(shared_state: Arc<FarmerSharedState<T>>, config: Arc<RwLock<Config<C>>>) -> Result<Arc<HashMap<Bytes32, Arc<DruidGardenHarvester<T>>>>, Error> {
+        let mut harvesters: HashMap<Bytes32, Arc<DruidGardenHarvester<T>>> = HashMap::new();
+        let mut farmer_public_keys = vec![];
+        let mut pool_public_keys = vec![];
+        let client_id = load_client_id::<C>(config.clone()).await?;
+        let config = config.read().await;
+        for farmer_info in &config.farmer_info {
+            let f_sk: SecretKey = farmer_info.farmer_secret_key.into();
+            farmer_public_keys.push(f_sk.sk_to_pk().to_bytes().into());
+            if let Some(pk) = farmer_info.pool_secret_key {
+                let p_sk: SecretKey = pk.into();
+                pool_public_keys.push(p_sk.sk_to_pk().to_bytes().into());
+            }
+        }
+        let pool_contract_hashes = config
+            .pool_info
+            .iter()
+            .map(|w| w.p2_singleton_puzzle_hash)
+            .collect::<Vec<Bytes32>>();
+        let mut sum = 0;
+        let mut total_size = 0;
+        let farming_keys = Arc::new(FarmingKeys {
+            farmer_public_keys,
+            pool_public_keys,
+            pool_contract_hashes,
+        });
+        if let Some(dg_config) = &config.harvester_configs.druid_garden {
+            for dir in &dg_config.plot_directories {
+                if let Err(e) = count_plots(Path::new(&dir), &mut sum, &mut total_size).await {
+                    error!("Error Counting Plots: {e:?}")
+                }
+            }
+            let harvester = DruidGardenHarvester::new(
+                dg_config
+                    .plot_directories
+                    .iter()
+                    .map(|s| Path::new(s).to_path_buf())
+                    .collect(),
+                farming_keys.clone(),
+                shared_state.signal.clone(),
+                &config.selected_network,
+                client_id,
+                shared_state.clone(),
+            )
+                .await?;
+            harvesters.insert(
+                <DruidGardenHarvester<T> as Harvester<T, C>>::uuid(&harvester),
+                Arc::new(harvester),
+            );
+        }
+        Ok(Arc::new(harvesters))
+    }
+    async fn new_signage_point<H>(
         &self,
         signage_point: Arc<NewSignagePointHarvester>,
-        proof_handle: T,
+        proof_handle: H,
     ) -> Result<(), Error>
     where
-        T: ProofHandler + Sync + Send,
+        H: ProofHandler + Sync + Send,
     {
         let start = self
             .shared_state
-            .data
-            .extended_metrics
-            .signage_point_processing_latency
-            .start_timer();
+            .metrics
+            .read()
+            .await
+            .as_ref()
+            .map(|m| m.signage_point_processing_latency
+                .start_timer());
         let plot_counts = Arc::new(PlotCounts::default());
         let harvester_point = Arc::new(signage_point);
         let constants = Arc::new(
@@ -91,7 +146,7 @@ impl Harvester for DruidGardenHarvester {
             let data_arc = harvester_point.clone();
             let constants_arc = constants.clone();
             let plot_counts = plot_counts.clone();
-            let metrics = self.shared_state.data.extended_metrics.clone();
+            let metrics = self.shared_state.metrics.clone();
             let mut responses = vec![];
             let plot_handle = timeout(Duration::from_secs(20), tokio::spawn(async move {
                 let (plot_id, k, memo, c_level) = match plot_info.reader.header() {
@@ -161,7 +216,12 @@ impl Harvester for DruidGardenHarvester {
                             }
                         }
                         for (index, quality) in qualities.into_iter() {
-                            let start = metrics.qualities_latency.start_timer();
+                            let start = metrics
+                                .read()
+                                .await
+                                .as_ref()
+                                .map(|m| m.qualities_latency
+                                    .start_timer());
                             let required_iters = calculate_iterations_quality(
                                 constants_arc.difficulty_constant_factor,
                                 quality,
@@ -169,12 +229,19 @@ impl Harvester for DruidGardenHarvester {
                                 dif,
                                 data_arc.sp_hash,
                             );
-                            start.stop_and_record();
+                            if let Some(start) = start {
+                                start.stop_and_record();
+                            }
                             if let Ok(sp_interval_iters) =
                                 calculate_sp_interval_iters(&constants_arc, sub_slot_iters)
                             {
                                 if required_iters < sp_interval_iters {
-                                    let start = metrics.proof_latency.start_timer();
+                                    let start = metrics
+                                        .read()
+                                        .await
+                                        .as_ref()
+                                        .map(|m| m.proof_latency
+                                            .start_timer());
                                     match plot_info.reader.fetch_ordered_proof(index).await {
                                         Ok(proof) => {
                                             let proof_bytes = proof_to_bytes(&proof);
@@ -205,7 +272,9 @@ impl Harvester for DruidGardenHarvester {
                                             error!("Failed to read Proof: {:?}", e);
                                         }
                                     }
-                                    start.stop_and_record();
+                                    if let Some(start) = start {
+                                        start.stop_and_record();
+                                    }
                                 } else {
                                     debug!(
                                         "Not Enough Iterations: {} > {}",
@@ -268,7 +337,11 @@ impl Harvester for DruidGardenHarvester {
                 }
             }
         }
-        let finished = start.stop_and_record();
+        let finished = if let Some(start) = start {
+            start.stop_and_record()
+        } else {
+            0.0
+        };
         debug!(
             "Finished Processing SP({}/{}) in {:.3} seconds",
             harvester_point.signage_point_index, harvester_point.sp_hash, finished
@@ -288,50 +361,74 @@ impl Harvester for DruidGardenHarvester {
             finished
         );
         self.shared_state
-            .data
-            .extended_metrics
-            .total_proofs_found
-            .inc_by(proofs.load(Ordering::Relaxed));
+            .metrics
+            .read()
+            .await
+            .as_ref()
+            .inspect(|m| {
+                m.total_proofs_found
+                    .inc_by(proofs.load(Ordering::Relaxed));
+            });
         self.shared_state
-            .data
-            .extended_metrics
-            .last_proofs_found
-            .set(proofs.load(Ordering::Relaxed));
+            .metrics
+            .read()
+            .await
+            .as_ref()
+            .inspect(|m| {
+                m.last_proofs_found
+                    .set(proofs.load(Ordering::Relaxed))
+            });
         let total_partials =
             nft_partials.load(Ordering::Relaxed) + compressed_partials.load(Ordering::Relaxed);
         self.shared_state
-            .data
-            .extended_metrics
-            .total_partials_found
-            .inc_by(total_partials);
+            .metrics
+            .read()
+            .await
+            .as_ref()
+            .inspect(|m| {
+                m.total_partials_found
+                    .inc_by(total_partials)
+            });
         self.shared_state
-            .data
-            .extended_metrics
-            .last_partials_found
-            .set(total_partials);
+            .metrics
+            .read()
+            .await
+            .as_ref()
+            .inspect(|m| {
+                m.last_partials_found
+                    .set(total_partials)
+            });
         let total_passed = plot_counts.og_passed.load(Ordering::Relaxed)
             + plot_counts.pool_passed.load(Ordering::Relaxed)
             + plot_counts.compressed_passed.load(Ordering::Relaxed);
         self.shared_state
-            .data
-            .extended_metrics
-            .total_passed_filter
-            .inc_by(total_passed);
+            .metrics
+            .read()
+            .await
+            .as_ref()
+            .inspect(|m| {
+                m.total_passed_filter
+                    .inc_by(total_passed)
+            });
         self.shared_state
-            .data
-            .extended_metrics
-            .last_passed_filter
-            .set(total_passed);
+            .metrics
+            .read()
+            .await
+            .as_ref()
+            .inspect(|m| {
+                m.last_passed_filter
+                    .set(total_passed)
+            });
         Ok(())
     }
 
-    async fn request_signatures<T>(
+    async fn request_signatures<H>(
         &self,
         request_signatures: RequestSignatures,
-        response_handle: T,
+        response_handle: H,
     ) -> Result<(), Error>
     where
-        T: SignatureHandler + Sync + Send,
+        H: SignatureHandler + Sync + Send,
     {
         let file_name = request_signatures.plot_identifier.split_at(64).1;
         let memo = match self.plots.lock().await.get(&PathInfo {
@@ -393,14 +490,14 @@ impl Harvester for DruidGardenHarvester {
     }
 }
 
-impl DruidGardenHarvester {
+impl<T: Send + Sync + 'static> DruidGardenHarvester<T>{
     pub async fn new(
         plot_dirs: Vec<PathBuf>,
         farming_keys: Arc<FarmingKeys>,
         shutdown_signal: Arc<AtomicBool>,
         selected_network: &str,
         client_id: Bytes32,
-        shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+        shared_state: Arc<FarmerSharedState<T>>,
     ) -> Result<Self, Error> {
         let decompressor_pool = Arc::new(DecompressorPool::new(
             1,
@@ -415,7 +512,7 @@ impl DruidGardenHarvester {
                 &farming_keys.pool_contract_hashes,
                 vec![],
                 decompressor_pool.clone(),
-                shared_state.data.extended_metrics.clone(),
+                shared_state.metrics.clone(),
             )
             .await?,
         ));
@@ -446,7 +543,7 @@ impl DruidGardenHarvester {
                         &plot_sync_farming_keys.pool_contract_hashes,
                         existing_plot_paths.as_ref().clone(),
                         plot_sync_decompressor_pool.clone(),
-                        plot_sync_shared_state.data.extended_metrics.clone(),
+                        plot_sync_shared_state.metrics.clone(),
                     )
                     .await
                     {
@@ -483,7 +580,7 @@ async fn load_plots(
     pool_contract_hashes: &[Bytes32],
     existing_plot_paths: Vec<PathBuf>,
     decompressor_pool: Arc<DecompressorPool>,
-    metrics: Arc<Metrics>,
+    metrics: Arc<RwLock<Option<FarmerMetrics>>>,
 ) -> Result<HashMap<PathInfo, Arc<PlotInfo>>, Error> {
     debug!("Started Loading Plots");
     if farmer_public_keys.is_empty() {
@@ -552,7 +649,7 @@ async fn load_plots(
                                     continue;
                                 }
                             };
-                            let plot_load = metrics.plot_load_latency.start_timer();
+                            let plot_load = metrics.read().await.as_ref().map(|v| v.plot_load_latency.start_timer());
                             let plot_file = match DiskPlot::new(&path).await {
                                 Ok(plot_file) => plot_file,
                                 Err(e) => {
@@ -561,7 +658,9 @@ async fn load_plots(
                                     continue;
                                 }
                             };
-                            plot_load.stop_and_record();
+                            if let Some(v) = plot_load {
+                                v.stop_and_record();
+                            }
                             match PlotReader::new(
                                 plot_file,
                                 Some(decompressor_pool.clone()),

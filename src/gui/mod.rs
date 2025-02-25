@@ -13,22 +13,24 @@ use ratatui::{prelude::*, widgets::*};
 
 use tui_logger::*;
 
-use crate::farmer::{ExtendedFarmerSharedState, Farmer, PlotCounts};
+use crate::farmer::{Farmer};
 use crate::metrics::metrics;
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
 use dg_xch_clients::api::pool::DefaultPoolClient;
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
-use dg_xch_core::protocols::farmer::{FarmerSharedState, MostRecentSignagePoint};
+use dg_xch_core::protocols::farmer::{FarmerSharedState, MostRecentSignagePoint, PlotCounts};
 use log::{LevelFilter, error};
 use portfu::prelude::ServerBuilder;
 use sysinfo::System;
 use time::OffsetDateTime;
 use time::macros::format_description;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::{JoinHandle, spawn_blocking};
 use tokio::time::sleep;
 use tokio::{join, select};
+use crate::farmer::config::Config;
+use crate::harvesters::{Harvester, Harvesters};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Action {
@@ -40,35 +42,38 @@ pub enum Action {
 }
 
 #[derive(Copy, Clone, Default, Debug, PartialEq)]
-struct SysInfo {
-    cpu_usage: u16,
-    ram_used: u64,
-    ram_total: u64,
-    swap_used: u64,
-    swap_total: u64,
+pub struct SysInfo {
+    pub cpu_usage: u16,
+    pub ram_used: u64,
+    pub ram_total: u64,
+    pub swap_used: u64,
+    pub swap_total: u64,
 }
 
-struct GuiState {
-    system_info: Arc<Mutex<SysInfo>>,
-    farmer_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+pub struct GuiState<T> {
+    pub system_info: Arc<Mutex<SysInfo>>,
+    pub farmer_state: Arc<FarmerSharedState<T>>,
+    pub full_node_state: Arc<RwLock<FullNodeState>>
 }
 
-impl GuiState {
-    fn new(shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>) -> GuiState {
+impl<T> GuiState<T> {
+    fn new(shared_state: Arc<FarmerSharedState<T>>) -> GuiState<T> {
         GuiState {
             system_info: Default::default(),
+            full_node_state: Default::default(),
             farmer_state: shared_state,
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct FullNodeState {
     pub blockchain_state: BlockchainState,
 }
 
-pub async fn bootstrap(
-    shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+pub async fn bootstrap<T: Send + Sync + 'static, C: Send + Sync + 'static>(
+    shared_state: Arc<FarmerSharedState<T>>,
+    config: Arc<RwLock<Config<C>>>,
 ) -> Result<(), Error> {
     init_logger(LevelFilter::Info).unwrap();
     set_default_level(LevelFilter::Info);
@@ -79,13 +84,16 @@ pub async fn bootstrap(
     let mut terminal = Terminal::new(backend)?;
     let gui_state = Arc::new(GuiState::new(shared_state.clone()));
     let farmer_gui_state = gui_state.clone();
+    let farmer_config = config.clone();
     let farmer_thread = tokio::spawn(async move {
         let farmer_state = farmer_gui_state.farmer_state.clone();
         let pool_state = farmer_state.clone();
+        let pool_config = farmer_config.clone();
         let pool_state_handle: JoinHandle<()> =
-            tokio::spawn(async move { pool_updater(pool_state).await });
+            tokio::spawn(async move { pool_updater(pool_state, pool_config).await });
         let pool_client = Arc::new(DefaultPoolClient::new());
-        let farmer = Farmer::new(farmer_state, pool_client).await?;
+        let harvesters = Harvesters::load(farmer_gui_state.farmer_state.clone(), farmer_config.clone()).await?;
+        let farmer = Farmer::<DefaultPoolClient, T, Harvesters<T>, C>::new(farmer_state, pool_client, harvesters, farmer_config).await?;
         let client_handle: JoinHandle<Result<(), Error>> = tokio::spawn(async move {
             farmer.run().await;
             Ok(())
@@ -94,8 +102,9 @@ pub async fn bootstrap(
         Ok::<(), Error>(())
     });
     let fullnode_state = gui_state.clone();
+    let fullnode_config = config.clone();
     let fullnode_thread =
-        tokio::spawn(async move { update_blockchain(fullnode_state.farmer_state.clone()).await });
+        tokio::spawn(async move { update_blockchain(fullnode_state.farmer_state.clone(), Some(fullnode_state.clone()), fullnode_config).await });
     let sys_info_gui_state = gui_state.clone();
     let sys_info_thread = tokio::spawn(async move {
         let mut system = System::new();
@@ -126,8 +135,7 @@ pub async fn bootstrap(
             system = sys;
             if !sys_info_gui_state
                 .farmer_state
-                .data
-                .run
+                .signal
                 .load(Ordering::Relaxed)
             {
                 break;
@@ -135,9 +143,7 @@ pub async fn bootstrap(
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     });
-    let metrics_settings = shared_state
-        .data
-        .config
+    let metrics_settings = config
         .read()
         .await
         .metrics
@@ -158,7 +164,7 @@ pub async fn bootstrap(
                 }
                 _ = async {
                     loop {
-                        if !metrics_state.data.run.load(Ordering::Relaxed) {
+                        if !metrics_state.signal.load(Ordering::Relaxed) {
                             break;
                         }
                         tokio::time::sleep(Duration::from_millis(10)).await
@@ -203,23 +209,21 @@ pub async fn bootstrap(
     Ok(())
 }
 
-async fn run_gui<B: Backend>(
+async fn run_gui<B: Backend, T>(
     terminal: &mut Terminal<B>,
-    gui_state: Arc<GuiState>,
+    gui_state: Arc<GuiState<T>>,
 ) -> std::io::Result<()> {
     loop {
         {
-            let farmer_state = gui_state.farmer_state.data.plot_counts.clone();
+            let farmer_state = gui_state.farmer_state.plot_counts.clone();
             let sys_info = *gui_state.system_info.lock().await;
             let most_recent_sp = *gui_state.farmer_state.most_recent_sp.read().await;
             let fullnode_state = gui_state
-                .farmer_state
-                .data
-                .fullnode_state
+                .full_node_state
                 .read()
                 .await
                 .clone();
-            terminal.draw(|f| ui(f, farmer_state, fullnode_state, most_recent_sp, &sys_info))?;
+            terminal.draw(|f| ui(f, farmer_state, Some(fullnode_state), most_recent_sp, &sys_info))?;
         }
         if event::poll(Duration::from_millis(25))? {
             if let Event::Key(event) = event::read()? {
@@ -227,16 +231,14 @@ async fn run_gui<B: Backend>(
                     KeyCode::Esc => {
                         gui_state
                             .farmer_state
-                            .data
-                            .run
+                            .signal
                             .store(false, Ordering::Relaxed);
                     }
                     KeyCode::Char('c') => {
                         if event.modifiers == KeyModifiers::CONTROL {
                             gui_state
                                 .farmer_state
-                                .data
-                                .run
+                                .signal
                                 .store(false, Ordering::Relaxed);
                         }
                     }
@@ -244,7 +246,7 @@ async fn run_gui<B: Backend>(
                 }
             }
         }
-        if !gui_state.farmer_state.data.run.load(Ordering::Relaxed) {
+        if !gui_state.farmer_state.signal.load(Ordering::Relaxed) {
             break;
         }
     }

@@ -1,14 +1,14 @@
 use crate::PROTOCOL_VERSION;
 use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
-use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
-use crate::harvesters::{Harvester, Harvesters};
+use crate::farmer::{FarmerSharedState};
+use crate::harvesters::{Harvester};
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_core::blockchain::proof_of_space::calculate_prefix_bits;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_core::constants::POOL_SUB_SLOT_ITERS;
-use dg_xch_core::protocols::farmer::{FarmerPoolState, NewSignagePoint};
+use dg_xch_core::protocols::farmer::{FarmerPoolState, MostRecentSignagePoint, NewSignagePoint};
 use dg_xch_core::protocols::harvester::{NewSignagePointHarvester, PoolDifficulty};
 use dg_xch_core::protocols::{ChiaMessage, MessageHandler, PeerMap};
 use dg_xch_serialize::ChiaSerialize;
@@ -17,23 +17,37 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::io::{Cursor, Error};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use dg_xch_clients::websocket::farmer::FarmerClient;
+use crate::farmer::config::Config;
 
-pub struct NewSignagePointHandle<T: PoolClient + Sized + Sync + Send + 'static> {
+pub struct NewSignagePointHandle<P, T, H, C> where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, C> + Sync + Send + 'static + ?Sized,
+    C: Send + Sync + 'static,
+{
     pub id: Uuid,
     pub harvester_id: Bytes32,
     pub pool_state: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
-    pub pool_client: Arc<T>,
+    pub pool_client: Arc<P>,
     pub signage_points: Arc<RwLock<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
     pub cache_time: Arc<RwLock<HashMap<Bytes32, Instant>>>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
+    pub harvesters: Arc<HashMap<Bytes32, Arc<H>>>,
     pub constants: &'static ConsensusConstants,
+    pub config: Arc<RwLock<Config<C>>>,
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>
 }
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignagePointHandle<T> {
+impl<P, T, H, C> MessageHandler for NewSignagePointHandle<P, T, H, C> where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static
+{
     async fn handle(
         &self,
         msg: Arc<ChiaMessage>,
@@ -78,14 +92,15 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
         );
         let now = Instant::now();
         let time_since_last_sp = now
-            .duration_since(*self.shared_state.data.last_sp_timestamp.read().await)
+            .duration_since(*self.shared_state.last_sp_timestamp.read().await)
             .as_millis();
-        self.shared_state
-            .data
-            .extended_metrics
-            .signage_point_interval
-            .observe(time_since_last_sp as f64 / 1000f64);
-        *self.shared_state.data.last_sp_timestamp.write().await = now;
+        if let Some(m) = &*self.shared_state
+            .metrics
+            .read()
+            .await {
+            m.signage_point_interval.observe(time_since_last_sp as f64 / 1000f64);
+        }
+        *self.shared_state.last_sp_timestamp.write().await = now;
         let filter_prefix_bits = calculate_prefix_bits(self.constants, sp.peak_height);
         let sp_hash = sp.challenge_chain_sp;
         let harvester_point = Arc::new(NewSignagePointHarvester {
@@ -101,8 +116,11 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             .write()
             .await
             .insert(sp_hash, Instant::now());
-        *self.shared_state.data.most_recent_sp.write().await =
-            (sp.challenge_hash, sp.signage_point_index);
+        *self.shared_state.most_recent_sp.write().await = MostRecentSignagePoint {
+            hash: sp.challenge_hash,
+            index: sp.signage_point_index,
+            timestamp: Instant::now(),
+        };
         match self.signage_points.write().await.entry(sp_hash) {
             Entry::Occupied(mut e) => {
                 e.get_mut().push(sp);
@@ -119,23 +137,23 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             let shared_state = self.shared_state.clone();
             let constants = self.constants;
             let harvester = harvester.clone();
+            let config = self.config.clone();
+            let client = self.client.clone();
             tokio::spawn(async move {
-                match harvester.as_ref() {
-                    Harvesters::DruidGarden(harvester) => {
-                        let proof_handle = NewProofOfSpaceHandle {
-                            pool_client,
-                            shared_state,
-                            harvester_id: harvester.uuid,
-                            harvesters,
-                            constants,
-                        };
-                        if let Err(e) = harvester
-                            .new_signage_point(harvester_point, proof_handle)
-                            .await
-                        {
-                            error!("Error Handling Signage Point: {}", e);
-                        }
-                    }
+                let proof_handle = NewProofOfSpaceHandle {
+                    pool_client,
+                    shared_state,
+                    harvester_id: harvester.uuid(),
+                    harvesters,
+                    constants,
+                    config,
+                    client,
+                };
+                if let Err(e) = harvester
+                    .new_signage_point(harvester_point, proof_handle)
+                    .await
+                {
+                    error!("Error Handling Signage Point: {}", e);
                 }
             });
         }

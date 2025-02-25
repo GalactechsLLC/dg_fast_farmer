@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use serde::Deserialize;
 
 const fn default_true() -> bool {
     true
@@ -51,13 +51,15 @@ pub struct DruidGardenHarvesterConfig {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct HarvesterConfig {
+pub struct HarvesterConfig<C = ()> {
     #[serde(default = "default_none")]
     pub druid_garden: Option<DruidGardenHarvesterConfig>,
+    #[serde(default = "default_none")]
+    pub custom_config: Option<C>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Config {
+pub struct Config<C = ()> {
     pub selected_network: String,
     pub ssl_root_path: Option<String>,
     pub fullnode_ws_host: String,
@@ -67,7 +69,7 @@ pub struct Config {
     pub farmer_info: Vec<FarmingInfo>,
     pub pool_info: Vec<PoolWalletConfig>,
     pub payout_address: String,
-    pub harvester_configs: HarvesterConfig,
+    pub harvester_configs: HarvesterConfig<C>,
     pub metrics: Option<MetricsConfig>,
 }
 impl Config {
@@ -96,7 +98,7 @@ impl Config {
     }
 }
 
-impl Default for Config {
+impl<C> Default for Config<C> {
     fn default() -> Self {
         Config {
             selected_network: "mainnet".to_string(),
@@ -110,6 +112,7 @@ impl Default for Config {
             payout_address: "".to_string(),
             harvester_configs: HarvesterConfig {
                 druid_garden: Some(DruidGardenHarvesterConfig::default()),
+                custom_config: None,
             },
             metrics: Some(MetricsConfig {
                 enabled: true,
@@ -118,22 +121,22 @@ impl Default for Config {
         }
     }
 }
-impl TryFrom<&Path> for Config {
+impl<C: for <'a> Deserialize<'a>> TryFrom<&Path> for Config<C> {
     type Error = Error;
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
-        serde_yaml::from_str::<Config>(&fs::read_to_string(value)?)
+        serde_yaml::from_str::<Config<C>>(&fs::read_to_string(value)?)
             .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))
     }
 }
-impl TryFrom<&PathBuf> for Config {
+impl<C: for <'a> Deserialize<'a>> TryFrom<&PathBuf> for Config<C> {
     type Error = Error;
-    fn try_from(value: &PathBuf) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_path())
+    fn try_from(value: &PathBuf) -> Result<Config<C>, Self::Error> {
+        Config::<C>::try_from(value.as_path())
     }
 }
 
-pub async fn load_keys(
-    config: Arc<Config>,
+pub async fn load_keys<C>(
+    config: &Config<C>,
 ) -> (
     HashMap<Bytes48, SecretKey>,
     HashMap<Bytes48, SecretKey>,

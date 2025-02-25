@@ -1,7 +1,7 @@
 use crate::PROTOCOL_VERSION;
 use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
-use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
-use crate::harvesters::{Harvester, Harvesters};
+use crate::farmer::{FarmerSharedState};
+use crate::harvesters::{Harvester};
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
@@ -16,18 +16,31 @@ use log::{debug, error};
 use std::collections::HashMap;
 use std::io::{Cursor, Error, ErrorKind};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
+use dg_xch_clients::websocket::farmer::FarmerClient;
+use crate::farmer::config::Config;
 
-pub struct RequestSignedValuesHandle<T: PoolClient + Sized + Sync + Send + 'static> {
+pub struct RequestSignedValuesHandle<P, T, H, C> where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static,
+{
     pub id: Uuid,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    pub pool_client: Arc<T>,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
+    pub pool_client: Arc<P>,
+    pub harvesters: Arc<HashMap<Bytes32, Arc<H>>>,
     pub constants: &'static ConsensusConstants,
+    pub config: Arc<RwLock<Config<C>>>,
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>
 }
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
-    for RequestSignedValuesHandle<T>
+impl<P, T, H, C> MessageHandler for RequestSignedValuesHandle<P, T, H, C> where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static
 {
     async fn handle(
         &self,
@@ -78,17 +91,14 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
                 harvester_id: identifier.peer_node_id,
                 harvesters: self.harvesters.clone(),
                 constants: self.constants,
+                config: self.config.clone(),
+                client: self.client.clone(),
             };
             if let Some(h) = self.harvesters.get(&identifier.peer_node_id) {
                 let harvester = h.clone();
                 tokio::spawn(async move {
-                    match harvester.as_ref() {
-                        Harvesters::DruidGarden(harvester) => {
-                            if let Err(e) = harvester.request_signatures(request, sig_handle).await
-                            {
-                                error!("Error Requesting Signature: {}", e);
-                            }
-                        }
+                    if let Err(e) = harvester.request_signatures(request, sig_handle).await {
+                        error!("Error Requesting Signature: {}", e);
                     }
                 });
             } else {
