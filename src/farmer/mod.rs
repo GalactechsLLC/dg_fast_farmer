@@ -4,7 +4,8 @@ use crate::farmer::config::Config;
 use crate::farmer::protocols::fullnode::new_signage_point::NewSignagePointHandle;
 use crate::farmer::protocols::fullnode::request_signed_values::RequestSignedValuesHandle;
 use crate::gui::FullNodeState;
-use crate::harvesters::{Harvester, Harvesters};
+use crate::harvesters::druid_garden::DruidGardenHarvester;
+use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
 use dg_xch_clients::ClientSSLConfig;
 use dg_xch_clients::api::pool::PoolClient;
 use dg_xch_clients::websocket::WsClientConfig;
@@ -18,9 +19,9 @@ use dg_xch_pos::plots::disk_plot::DiskPlot;
 use dg_xch_pos::plots::plot_reader::PlotReader;
 use log::{error, info};
 use once_cell::sync::Lazy;
-use std::collections::{HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::Error;
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,7 +41,6 @@ pub static PRIVATE_KEY: &str = "farmer/private_farmer.key";
 pub static CA_PRIVATE_CRT: &str = "ca/private_ca.crt";
 
 pub static HARVESTER_CRT: &str = "harvester/private_harvester.crt";
-
 
 #[derive(Clone)]
 pub struct ExtendedFarmerSharedState {
@@ -91,36 +91,46 @@ pub struct PlotInfo {
     pub time_modified: u64,
 }
 
-pub struct Farmer<P, T = (), H = Harvesters<T>, C = ()> where
+pub struct Farmer<P, O, S, T = (), H = DruidGardenHarvester<T>, C = ()>
+where
     P: PoolClient + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
-    H: Harvester<T, C> + Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
     C: Send + Sync + 'static,
 {
     shared_state: Arc<FarmerSharedState<T>>,
-    harvesters: Arc<HashMap<Bytes32, Arc<H>>>,
+    harvester: Arc<H>,
     pool_client: Arc<P>,
     full_node_client: Arc<RwLock<Option<FarmerClient<T>>>>,
     config: Arc<RwLock<Config<C>>>,
+    phantom_proof_handler: PhantomData<O>,
+    phantom_signature_handler: PhantomData<S>,
 }
-impl<P, T, H, C> Farmer<P, T, H, C> where
-    P: PoolClient + Sized + Sync + Send + 'static,
+impl<P, O, S, T, H, C> Farmer<P, O, S, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
-    H: Harvester<T, C> + Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
     C: Send + Sync + 'static,
 {
     pub async fn new(
         shared_state: Arc<FarmerSharedState<T>>,
         pool_client: Arc<P>,
-        harvesters: Arc<HashMap<Bytes32, Arc<H>>>,
+        harvester: Arc<H>,
         config: Arc<RwLock<Config<C>>>,
     ) -> Result<Self, Error> {
         Ok(Self {
             shared_state,
-            harvesters,
+            harvester,
             pool_client,
             full_node_client: Default::default(),
-            config
+            config,
+            phantom_proof_handler: Default::default(),
+            phantom_signature_handler: Default::default(),
         })
     }
 
@@ -153,7 +163,11 @@ impl<P, T, H, C> Farmer<P, T, H, C> where
                 }
                 client_run = Arc::new(AtomicBool::new(true));
                 match s
-                    .create_farmer_client(s.shared_state.clone(), s.config.clone(), client_run.clone())
+                    .create_farmer_client(
+                        s.shared_state.clone(),
+                        s.config.clone(),
+                        client_run.clone(),
+                    )
                     .await
                 {
                     Ok(c) => {
@@ -166,7 +180,10 @@ impl<P, T, H, C> Farmer<P, T, H, C> where
                             error!("Failed to read chia versio0n from client handshake");
                         }
                         *s.full_node_client.write().await = Some(c);
-                        if let Err(e) = s.attach_client_handlers(s.full_node_client.clone(), s.config.clone()).await {
+                        if let Err(e) = s
+                            .attach_client_handlers(s.full_node_client.clone(), s.config.clone())
+                            .await
+                        {
                             error!("Failed to attach socket listeners: {:?}", e);
                             continue;
                         } else {
@@ -302,15 +319,29 @@ impl<P, T, H, C> Farmer<P, T, H, C> where
         client: Arc<RwLock<Option<FarmerClient<T>>>>,
         config: Arc<RwLock<Config<C>>>,
     ) -> Result<(), Error> {
-        if let Some(c) = &* client.read().await {
+        if let Some(c) = &*client.read().await {
             c.client.connection.write().await.clear().await;
         }
         let signage_handle_id = Uuid::new_v4();
         let request_signed_values_id = Uuid::new_v4();
         let harvester_id = load_client_id(config.clone()).await?;
+        let proof_handle = O::load(
+            self.shared_state.clone(),
+            config.clone(),
+            self.harvester.clone(),
+            client.clone(),
+        )
+        .await?;
+        let signature_handle = S::load(
+            self.shared_state.clone(),
+            config.clone(),
+            self.harvester.clone(),
+            client.clone(),
+        )
+        .await?;
         let config = config.read().await;
         let inner_client = client.clone();
-        if let Some(c) = & *client.read().await {
+        if let Some(c) = &*client.read().await {
             c.client
                 .connection
                 .write()
@@ -327,12 +358,13 @@ impl<P, T, H, C> Farmer<P, T, H, C> where
                             pool_client: self.pool_client.clone(),
                             signage_points: self.shared_state.signage_points.clone(),
                             cache_time: self.shared_state.cache_time.clone(),
-                            harvesters: self.harvesters.clone(),
+                            harvester: self.harvester.clone(),
                             constants: CONSENSUS_CONSTANTS_MAP
                                 .get(&config.selected_network)
                                 .unwrap_or(&MAINNET),
                             client: inner_client.clone(),
                             config: self.config.clone(),
+                            proof_handle,
                         }),
                     )),
                 )
@@ -349,12 +381,13 @@ impl<P, T, H, C> Farmer<P, T, H, C> where
                             id: request_signed_values_id,
                             shared_state: self.shared_state.clone(),
                             pool_client: self.pool_client.clone(),
-                            harvesters: self.harvesters.clone(),
+                            harvester: self.harvester.clone(),
                             constants: CONSENSUS_CONSTANTS_MAP
                                 .get(&config.selected_network)
                                 .unwrap_or(&MAINNET),
                             client: inner_client.clone(),
                             config: self.config.clone(),
+                            signature_handle,
                         }),
                     )),
                 )

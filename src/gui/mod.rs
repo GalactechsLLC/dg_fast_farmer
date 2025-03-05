@@ -13,7 +13,9 @@ use ratatui::{prelude::*, widgets::*};
 
 use tui_logger::*;
 
-use crate::farmer::{Farmer};
+use crate::farmer::Farmer;
+use crate::farmer::config::Config;
+use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
 use crate::metrics::metrics;
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
@@ -29,8 +31,6 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::{JoinHandle, spawn_blocking};
 use tokio::time::sleep;
 use tokio::{join, select};
-use crate::farmer::config::Config;
-use crate::harvesters::{Harvester, Harvesters};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Action {
@@ -53,7 +53,7 @@ pub struct SysInfo {
 pub struct GuiState<T> {
     pub system_info: Arc<Mutex<SysInfo>>,
     pub farmer_state: Arc<FarmerSharedState<T>>,
-    pub full_node_state: Arc<RwLock<FullNodeState>>
+    pub full_node_state: Arc<RwLock<FullNodeState>>,
 }
 
 impl<T> GuiState<T> {
@@ -71,9 +71,16 @@ pub struct FullNodeState {
     pub blockchain_state: BlockchainState,
 }
 
-pub async fn bootstrap<T: Send + Sync + 'static, C: Send + Sync + 'static>(
+pub async fn bootstrap<
+    T: Send + Sync + 'static,
+    C: Send + Sync + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+>(
     shared_state: Arc<FarmerSharedState<T>>,
     config: Arc<RwLock<Config<C>>>,
+    harvester: Arc<H>,
 ) -> Result<(), Error> {
     init_logger(LevelFilter::Info).unwrap();
     set_default_level(LevelFilter::Info);
@@ -92,8 +99,13 @@ pub async fn bootstrap<T: Send + Sync + 'static, C: Send + Sync + 'static>(
         let pool_state_handle: JoinHandle<()> =
             tokio::spawn(async move { pool_updater(pool_state, pool_config).await });
         let pool_client = Arc::new(DefaultPoolClient::new());
-        let harvesters = Harvesters::load(farmer_gui_state.farmer_state.clone(), farmer_config.clone()).await?;
-        let farmer = Farmer::<DefaultPoolClient, T, Harvesters<T>, C>::new(farmer_state, pool_client, harvesters, farmer_config).await?;
+        let farmer = Farmer::<DefaultPoolClient, O, S, T, H, C>::new(
+            farmer_state,
+            pool_client,
+            harvester,
+            farmer_config,
+        )
+        .await?;
         let client_handle: JoinHandle<Result<(), Error>> = tokio::spawn(async move {
             farmer.run().await;
             Ok(())
@@ -103,8 +115,14 @@ pub async fn bootstrap<T: Send + Sync + 'static, C: Send + Sync + 'static>(
     });
     let fullnode_state = gui_state.clone();
     let fullnode_config = config.clone();
-    let fullnode_thread =
-        tokio::spawn(async move { update_blockchain(fullnode_state.farmer_state.clone(), Some(fullnode_state.clone()), fullnode_config).await });
+    let fullnode_thread = tokio::spawn(async move {
+        update_blockchain(
+            fullnode_state.farmer_state.clone(),
+            Some(fullnode_state.clone()),
+            fullnode_config,
+        )
+        .await
+    });
     let sys_info_gui_state = gui_state.clone();
     let sys_info_thread = tokio::spawn(async move {
         let mut system = System::new();
@@ -143,12 +161,7 @@ pub async fn bootstrap<T: Send + Sync + 'static, C: Send + Sync + 'static>(
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     });
-    let metrics_settings = config
-        .read()
-        .await
-        .metrics
-        .clone()
-        .unwrap_or_default();
+    let metrics_settings = config.read().await.metrics.clone().unwrap_or_default();
     let metrics_state = shared_state.clone();
     let server_handle = if metrics_settings.enabled {
         tokio::spawn(async move {
@@ -218,12 +231,16 @@ async fn run_gui<B: Backend, T>(
             let farmer_state = gui_state.farmer_state.plot_counts.clone();
             let sys_info = *gui_state.system_info.lock().await;
             let most_recent_sp = *gui_state.farmer_state.most_recent_sp.read().await;
-            let fullnode_state = gui_state
-                .full_node_state
-                .read()
-                .await
-                .clone();
-            terminal.draw(|f| ui(f, farmer_state, Some(fullnode_state), most_recent_sp, &sys_info))?;
+            let fullnode_state = gui_state.full_node_state.read().await.clone();
+            terminal.draw(|f| {
+                ui(
+                    f,
+                    farmer_state,
+                    Some(fullnode_state),
+                    most_recent_sp,
+                    &sys_info,
+                )
+            })?;
         }
         if event::poll(Duration::from_millis(25))? {
             if let Event::Key(event) = event::read()? {

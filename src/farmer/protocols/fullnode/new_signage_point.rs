@@ -1,9 +1,10 @@
 use crate::PROTOCOL_VERSION;
-use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
-use crate::farmer::{FarmerSharedState};
-use crate::harvesters::{Harvester};
+use crate::farmer::FarmerSharedState;
+use crate::farmer::config::Config;
+use crate::harvesters::{Harvester, ProofHandler};
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
+use dg_xch_clients::websocket::farmer::FarmerClient;
 use dg_xch_core::blockchain::proof_of_space::calculate_prefix_bits;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::consensus::constants::ConsensusConstants;
@@ -17,16 +18,16 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::io::{Cursor, Error};
 use std::sync::Arc;
-use std::time::{Instant};
+use std::time::Instant;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use dg_xch_clients::websocket::farmer::FarmerClient;
-use crate::farmer::config::Config;
 
-pub struct NewSignagePointHandle<P, T, H, C> where
-    P: PoolClient + Sized + Sync + Send + 'static,
+pub struct NewSignagePointHandle<P, O, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
-    H: Harvester<T, C> + Sync + Send + 'static + ?Sized,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
     C: Send + Sync + 'static,
 {
     pub id: Uuid,
@@ -36,17 +37,20 @@ pub struct NewSignagePointHandle<P, T, H, C> where
     pub signage_points: Arc<RwLock<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
     pub cache_time: Arc<RwLock<HashMap<Bytes32, Instant>>>,
     pub shared_state: Arc<FarmerSharedState<T>>,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<H>>>,
+    pub harvester: Arc<H>,
     pub constants: &'static ConsensusConstants,
     pub config: Arc<RwLock<Config<C>>>,
-    pub client: Arc<RwLock<Option<FarmerClient<T>>>>
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    pub proof_handle: Arc<O>,
 }
 #[async_trait]
-impl<P, T, H, C> MessageHandler for NewSignagePointHandle<P, T, H, C> where
-    P: PoolClient + Sized + Sync + Send + 'static,
+impl<P, O, T, H, C> MessageHandler for NewSignagePointHandle<P, O, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
-    H: Harvester<T, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static,
 {
     async fn handle(
         &self,
@@ -94,11 +98,9 @@ impl<P, T, H, C> MessageHandler for NewSignagePointHandle<P, T, H, C> where
         let time_since_last_sp = now
             .duration_since(*self.shared_state.last_sp_timestamp.read().await)
             .as_millis();
-        if let Some(m) = &*self.shared_state
-            .metrics
-            .read()
-            .await {
-            m.signage_point_interval.observe(time_since_last_sp as f64 / 1000f64);
+        if let Some(m) = &*self.shared_state.metrics.read().await {
+            m.signage_point_interval
+                .observe(time_since_last_sp as f64 / 1000f64);
         }
         *self.shared_state.last_sp_timestamp.write().await = now;
         let filter_prefix_bits = calculate_prefix_bits(self.constants, sp.peak_height);
@@ -130,33 +132,23 @@ impl<P, T, H, C> MessageHandler for NewSignagePointHandle<P, T, H, C> where
             }
         }
         debug!("Sending NewSignagePoint to Harvesters, Using Filter Bits: {filter_prefix_bits}");
-        for (_, harvester) in self.harvesters.iter() {
-            let harvester_point = harvester_point.clone();
-            let harvesters = self.harvesters.clone();
-            let pool_client = self.pool_client.clone();
-            let shared_state = self.shared_state.clone();
-            let constants = self.constants;
-            let harvester = harvester.clone();
-            let config = self.config.clone();
-            let client = self.client.clone();
-            tokio::spawn(async move {
-                let proof_handle = NewProofOfSpaceHandle {
-                    pool_client,
-                    shared_state,
-                    harvester_id: harvester.uuid(),
-                    harvesters,
-                    constants,
-                    config,
-                    client,
-                };
-                if let Err(e) = harvester
-                    .new_signage_point(harvester_point, proof_handle)
-                    .await
-                {
-                    error!("Error Handling Signage Point: {}", e);
-                }
-            });
-        }
+        let harvester_point = harvester_point.clone();
+        let shared_state = self.shared_state.clone();
+        let harvester = self.harvester.clone();
+        let config = self.config.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            if let Err(e) = harvester
+                .new_signage_point(
+                    harvester_point,
+                    O::load(shared_state, config, harvester.clone(), client.clone()).await?,
+                )
+                .await
+            {
+                error!("Error Handling Signage Point: {}", e);
+            }
+            Ok::<(), Error>(())
+        });
         debug!("Finished Processing SignagePoint: {sp_hash}");
         Ok(())
     }

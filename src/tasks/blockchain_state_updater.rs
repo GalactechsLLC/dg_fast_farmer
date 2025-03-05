@@ -1,4 +1,6 @@
 use crate::cli::utils::rpc_client_from_config;
+use crate::farmer::config::Config;
+use crate::gui::{FullNodeState, GuiState};
 use dg_xch_clients::api::full_node::FullnodeAPI;
 use dg_xch_core::protocols::farmer::FarmerSharedState;
 use log::error;
@@ -6,13 +8,11 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use crate::farmer::config::Config;
-use crate::gui::{FullNodeState, GuiState};
 
 pub async fn update_blockchain<T, C>(
     farmer_state: Arc<FarmerSharedState<T>>,
     gui_state: Option<Arc<GuiState<T>>>,
-    config: Arc<RwLock<Config<C>>>
+    config: Arc<RwLock<Config<C>>>,
 ) {
     let config = config.read().await;
     let mut full_node_rpc_res = rpc_client_from_config(&*config, &None);
@@ -33,12 +33,10 @@ pub async fn update_blockchain<T, C>(
             match bc_state {
                 Ok(bc_state) => {
                     if let Some(metrics) = &*farmer_state.metrics.read().await {
-                        metrics
-                            .blockchain_height
-                            .set(bc_state.peak.as_ref().map(|p| p.height).unwrap_or_default() as u64);
-                        metrics
-                            .blockchain_synced
-                            .set(bc_state.sync.synced as u64);
+                        metrics.blockchain_height.set(
+                            bc_state.peak.as_ref().map(|p| p.height).unwrap_or_default() as u64,
+                        );
+                        metrics.blockchain_synced.set(bc_state.sync.synced as u64);
                         metrics
                             .blockchain_netspace
                             .set((bc_state.space / 1024u128 / 1024u128 / 1024u128) as u64); //Convert to GiB for better fitting into u64

@@ -3,11 +3,11 @@ use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::config::PoolWalletConfig;
 use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
 use dg_xch_keys::decode_puzzle_hash;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
-use serde::Deserialize;
 
 const fn default_true() -> bool {
     true
@@ -121,14 +121,14 @@ impl<C> Default for Config<C> {
         }
     }
 }
-impl<C: for <'a> Deserialize<'a>> TryFrom<&Path> for Config<C> {
+impl<C: for<'a> Deserialize<'a>> TryFrom<&Path> for Config<C> {
     type Error = Error;
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
         serde_yaml::from_str::<Config<C>>(&fs::read_to_string(value)?)
             .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))
     }
 }
-impl<C: for <'a> Deserialize<'a>> TryFrom<&PathBuf> for Config<C> {
+impl<C: for<'a> Deserialize<'a>> TryFrom<&PathBuf> for Config<C> {
     type Error = Error;
     fn try_from(value: &PathBuf) -> Result<Config<C>, Self::Error> {
         Config::<C>::try_from(value.as_path())

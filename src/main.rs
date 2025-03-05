@@ -1,6 +1,7 @@
+use dg_fast_farmer::harvesters::druid_garden::DruidGardenHarvester;
+use dg_fast_farmer::{NewProofHandler, SignaturesHandler, cli};
 use std::io::{Error, ErrorKind};
-use dg_fast_farmer::cli;
-use dg_fast_farmer::harvesters::Harvesters;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -11,5 +12,5 @@ async fn main() -> Result<(), Error> {
             "Failed to Install default Crypto Provider",
         )
     })?;
-    cli::<(), Harvesters<()>, ()>(()).await
+    cli::<(), DruidGardenHarvester<()>, (), NewProofHandler, SignaturesHandler>(Arc::new(())).await
 }

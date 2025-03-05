@@ -1,15 +1,17 @@
 use crate::PROTOCOL_VERSION;
-use crate::farmer::{FarmerSharedState};
+use crate::farmer::FarmerSharedState;
+use crate::farmer::config::Config;
 use crate::harvesters::{Harvester, SignatureHandler};
 use async_trait::async_trait;
 use blst::BLST_ERROR;
 use blst::min_pk::AggregateSignature;
 use dg_xch_clients::api::pool::PoolClient;
+use dg_xch_clients::websocket::farmer::FarmerClient;
 use dg_xch_core::blockchain::pool_target::PoolTarget;
 use dg_xch_core::blockchain::proof_of_space::{generate_plot_public_key, generate_taproot_sk};
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes96};
 use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend};
-use dg_xch_core::consensus::constants::ConsensusConstants;
+use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, ConsensusConstants, MAINNET};
 use dg_xch_core::constants::AUG_SCHEME_DST;
 use dg_xch_core::protocols::farmer::{DeclareProofOfSpace, SignedValues};
 use dg_xch_core::protocols::harvester::RespondSignatures;
@@ -19,36 +21,52 @@ use dg_xch_keys::{decode_puzzle_hash, parse_payout_address};
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
-use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
-use dg_xch_clients::websocket::farmer::FarmerClient;
-use crate::farmer::config::Config;
 
-pub struct RespondSignaturesHandler<P, T, H, C> where
+pub struct RespondSignaturesHandler<P, T, H, C>
+where
     P: PoolClient + Sized + Sync + Send + 'static,
     T: Sync + Send + 'static,
-    H: Harvester<T, C> + Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
     C: Send + Sync + 'static,
 {
     pub pool_client: Arc<P>,
     pub shared_state: Arc<FarmerSharedState<T>>,
-    pub harvester_id: Bytes32,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<H>>>,
+    pub harvester: Arc<H>,
     pub constants: &'static ConsensusConstants,
     pub config: Arc<RwLock<Config<C>>>,
-    pub client: Arc<RwLock<Option<FarmerClient<T>>>>
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>,
 }
 #[async_trait]
-impl<P, T, H, C> SignatureHandler for RespondSignaturesHandler<P, T, H, C> where
-    P: PoolClient + Sized + Sync + Send + 'static,
+impl<P, T, H, C> SignatureHandler<T, H, C> for RespondSignaturesHandler<P, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
     T: Sync + Send + 'static,
-    H: Harvester<T, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static,
 {
+    async fn load(
+        shared_state: Arc<FarmerSharedState<T>>,
+        config: Arc<RwLock<Config<C>>>,
+        harvester: Arc<H>,
+        client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    ) -> Result<Arc<Self>, Error> {
+        let network = config.read().await.selected_network.clone();
+        let s = Self {
+            pool_client: Arc::new(P::default()),
+            shared_state,
+            harvester,
+            constants: CONSENSUS_CONSTANTS_MAP.get(&network).unwrap_or(&MAINNET),
+            config,
+            client,
+        };
+        Ok(Arc::new(s))
+    }
+
     async fn handle_signature(&self, response: RespondSignatures) -> Result<(), Error> {
         if let Some(sps) = self
             .shared_state
@@ -280,7 +298,8 @@ impl<P, T, H, C> SignatureHandler for RespondSignaturesHandler<P, T, H, C> where
                                             || response.farmer_reward_address_override.is_some(),
                                     };
                                     if let Some(client) = &*self.client.read().await {
-                                        client.client
+                                        client
+                                            .client
                                             .connection
                                             .write()
                                             .await
@@ -291,8 +310,8 @@ impl<P, T, H, C> SignatureHandler for RespondSignaturesHandler<P, T, H, C> where
                                                     &request,
                                                     None,
                                                 )
-                                                    .to_bytes(PROTOCOL_VERSION)
-                                                    .into(),
+                                                .to_bytes(PROTOCOL_VERSION)
+                                                .into(),
                                             ))
                                             .await?;
                                         debug!("Declaring Proof of Space: {:?}", request);
@@ -443,12 +462,7 @@ impl<P, T, H, C> SignatureHandler for RespondSignaturesHandler<P, T, H, C> where
                                             .to_bytes()
                                             .into(),
                                     };
-                                    if let Some(client) = self
-                                        .client
-                                        .read()
-                                        .await
-                                        .as_ref()
-                                    {
+                                    if let Some(client) = self.client.read().await.as_ref() {
                                         let _ = client
                                             .client
                                             .connection

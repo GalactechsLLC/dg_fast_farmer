@@ -1,9 +1,26 @@
-use crate::cli::commands::{cli_mode, generate_config_from_mnemonic, join_pool, tui_mode, update, update_pool_info, GenerateConfig};
-use crate::farmer::ExtendedFarmerSharedState;
+use crate::cli::commands::{
+    GenerateConfig, cli_mode, generate_config_from_mnemonic, join_pool, tui_mode, update,
+    update_pool_info,
+};
+use crate::cli::utils::{check_config, get_config_path, get_ssl_root_path, init_logger};
+use crate::cli::{Action, Cli};
+use crate::farmer::config::{Config, load_keys};
+use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
+use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
+use crate::harvesters::druid_garden::DruidGardenHarvester;
+use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
+use crate::metrics::get_metrics;
+use blst::min_pk::SecretKey;
+use clap::Parser;
+use dg_xch_clients::api::pool::{DefaultPoolClient, create_pool_login_url};
+use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::protocols::farmer::FarmerSharedState;
+use dg_xch_core::ssl::create_all_ssl;
+use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
 use dg_xch_serialize::ChiaProtocolVersion;
 use once_cell::sync::Lazy;
 use portfu::prelude::http::header::USER_AGENT;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::io::{Error, ErrorKind};
@@ -11,20 +28,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use blst::min_pk::SecretKey;
-use clap::Parser;
-use serde::Deserialize;
 use tokio::fs::create_dir_all;
 use tokio::sync::RwLock;
-use dg_xch_clients::api::pool::create_pool_login_url;
-use dg_xch_core::blockchain::sized_bytes::Bytes32;
-use dg_xch_core::ssl::create_all_ssl;
-use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
-use crate::cli::{Action, Cli};
-use crate::cli::utils::{check_config, get_config_path, get_ssl_root_path, init_logger};
-use crate::farmer::config::{load_keys, Config};
-use crate::harvesters::{Harvester, Harvesters};
-use crate::metrics::get_metrics;
 
 const PROTOCOL_VERSION: ChiaProtocolVersion = ChiaProtocolVersion::Chia0_0_36;
 
@@ -79,23 +84,59 @@ pub struct RunArgs<T> {
     pub shared_state: Arc<FarmerSharedState<T>>,
 }
 
-pub async fn run(args: RunArgs<ExtendedFarmerSharedState>, config: Config<()>) -> Result<(), Error> {
+pub type SignaturesHandler =
+    RespondSignaturesHandler<DefaultPoolClient, (), DruidGardenHarvester<()>, ()>;
+pub type NewProofHandler =
+    NewProofOfSpaceHandle<DefaultPoolClient, SignaturesHandler, (), DruidGardenHarvester<()>, ()>;
+
+pub async fn run(args: RunArgs<()>, config: Config<()>) -> Result<(), Error> {
+    let config = Arc::new(RwLock::new(config));
+    let harvester = DruidGardenHarvester::load(args.shared_state.clone(), config.clone()).await?;
     match args.mode {
-        RunMode::Cli => cli_mode::<ExtendedFarmerSharedState, Harvesters<ExtendedFarmerSharedState>, ()>(args.shared_state, Arc::new(RwLock::new(config))).await,
-        RunMode::Tui => tui_mode::<ExtendedFarmerSharedState, Harvesters<ExtendedFarmerSharedState>, ()>(args.shared_state, Arc::new(RwLock::new(config))).await,
+        RunMode::Cli => {
+            cli_mode::<(), DruidGardenHarvester<()>, (), NewProofHandler, SignaturesHandler>(
+                args.shared_state,
+                config,
+                harvester,
+            )
+            .await
+        }
+        RunMode::Tui => {
+            tui_mode::<(), DruidGardenHarvester<()>, (), NewProofHandler, SignaturesHandler>(
+                args.shared_state,
+                config,
+                harvester,
+            )
+            .await
+        }
     }
 }
 
-pub async fn run_with_custom_harvester<T, H, C>(args: RunArgs<T>, config: Config<C>) -> Result<(), Error>
-where T: Sync + Send + 'static, H: Harvester<T, C> + Sync + Send + 'static, C: Sync + Send + 'static {
+pub async fn run_with_custom_harvester<T, H, C, O, S>(
+    args: RunArgs<T>,
+    config: Arc<RwLock<Config<C>>>,
+    harvester: Arc<H>,
+) -> Result<(), Error>
+where
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+{
     match args.mode {
-        RunMode::Cli => cli_mode::<T, H, C>(args.shared_state, Arc::new(RwLock::new(config))).await,
-        RunMode::Tui => tui_mode::<T, H, C>(args.shared_state, Arc::new(RwLock::new(config))).await,
+        RunMode::Cli => cli_mode::<T, H, C, O, S>(args.shared_state, config, harvester).await,
+        RunMode::Tui => tui_mode::<T, H, C, O, S>(args.shared_state, config, harvester).await,
     }
 }
 
-pub async fn cli<T, H, C>(additional_state: T) -> Result<(), Error>
-where T: Default + Sync + Send + 'static, H: Harvester<T, C> + Sync + Send + 'static, C: for <'a> Deserialize<'a> + Sync + Send + 'static
+pub async fn cli<T, H, C, O, S>(additional_state: Arc<T>) -> Result<(), Error>
+where
+    T: Default + Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: for<'a> Deserialize<'a> + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
     let cli = Cli::parse();
     let config_path = if let Some(s) = &cli.config {
@@ -129,15 +170,20 @@ where T: Default + Sync + Send + 'static, H: Harvester<T, C> + Sync + Send + 'st
                 owner_secret_keys: Arc::new(owner_secret_keys),
                 owner_public_keys_to_auth_secret_keys: Arc::new(auth_secret_keys),
                 pool_public_keys: Arc::new(pool_public_keys),
-                data: Arc::new(additional_state),
+                data: additional_state,
                 metrics: Arc::new(RwLock::new(Some(get_metrics()))),
                 signal: Arc::new(AtomicBool::new(true)),
                 ..Default::default()
             });
             let config = Arc::new(RwLock::new(config));
+            let harvester = H::load(shared_state.clone(), config.clone()).await?;
             match mode.unwrap_or_default() {
-                cli::RunMode::Cli => cli_mode::<T, H, C>(shared_state, config).await,
-                cli::RunMode::Tui => tui_mode::<T, H, C>(shared_state, config).await,
+                cli::RunMode::Cli => {
+                    cli_mode::<T, H, C, O, S>(shared_state, config, harvester).await
+                }
+                cli::RunMode::Tui => {
+                    tui_mode::<T, H, C, O, S>(shared_state, config, harvester).await
+                }
             }
         }
         Action::Init {
@@ -172,7 +218,7 @@ where T: Default + Sync + Send + 'static, H: Harvester<T, C> + Sync + Send + 'st
                 },
                 true,
             )
-                .await?;
+            .await?;
             Ok(())
         }
         Action::Update {} => {

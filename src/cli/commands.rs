@@ -4,9 +4,10 @@ use crate::cli::prompts::{
     prompt_for_rpc_fullnode, prompt_for_rpc_port, prompt_for_ssl_path,
 };
 use crate::cli::utils::{get_ssl_root_path, init_logger, rpc_client_from_config};
+use crate::farmer::Farmer;
 use crate::farmer::config::{Config, DruidGardenHarvesterConfig, FarmingInfo};
-use crate::farmer::{Farmer};
 use crate::gui;
+use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
 use crate::metrics::metrics;
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
@@ -41,20 +42,35 @@ use std::sync::atomic::Ordering;
 use tokio::join;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use crate::harvesters::Harvester;
 
-pub async fn tui_mode<T, H, C>(
+pub async fn tui_mode<T, H, C, O, S>(
     shared_state: Arc<FarmerSharedState<T>>,
     config: Arc<RwLock<Config<C>>>,
-) -> Result<(), Error> where T: Sync + Send + 'static, H: Harvester<T, C> + Sync + Send + 'static, C: Send + Sync + 'static {
-    gui::bootstrap(shared_state, config).await?;
+    harvester: Arc<H>,
+) -> Result<(), Error>
+where
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+{
+    gui::bootstrap::<T, C, H, O, S>(shared_state, config, harvester).await?;
     Ok(())
 }
 
-pub async fn cli_mode<T, H, C>(
+pub async fn cli_mode<T, H, C, O, S>(
     shared_state: Arc<FarmerSharedState<T>>,
     config: Arc<RwLock<Config<C>>>,
-) -> Result<(), Error> where T: Sync + Send + 'static, H: Harvester<T, C> + Sync + Send + 'static, C: Send + Sync + 'static {
+    harvester: Arc<H>,
+) -> Result<(), Error>
+where
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Send + Sync + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+{
     init_logger();
     let constants = CONSENSUS_CONSTANTS_MAP
         .get(&config.read().await.selected_network)
@@ -82,8 +98,13 @@ pub async fn cli_mode<T, H, C>(
     });
 
     let pool_client = Arc::new(DefaultPoolClient::new());
-    let harvester = H::load(shared_state.clone(), config.clone()).await?;
-    let farmer = Farmer::<DefaultPoolClient, T, H, C>::new(shared_state.clone(), pool_client, harvester, config.clone()).await?;
+    let farmer = Farmer::<DefaultPoolClient, O, S, T, H, C>::new(
+        shared_state.clone(),
+        pool_client,
+        harvester,
+        config.clone(),
+    )
+    .await?;
     //Client Vars
     let client_handle: JoinHandle<Result<(), Error>> = tokio::spawn(async move {
         farmer.run().await;
@@ -92,7 +113,9 @@ pub async fn cli_mode<T, H, C>(
     let fn_shared_state = shared_state.clone();
     let fn_config = config.clone();
     let fullnode_thread =
-        tokio::spawn(async move { update_blockchain(fn_shared_state.clone(), None, fn_config).await });
+        tokio::spawn(
+            async move { update_blockchain(fn_shared_state.clone(), None, fn_config).await },
+        );
     let metrics_settings = config.read().await.metrics.clone().unwrap_or_default();
     info!(
         "Metrics: {} on port: {}",

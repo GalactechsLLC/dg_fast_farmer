@@ -68,9 +68,7 @@ pub(crate) fn rpc_client_from_config<C>(
     )?))
 }
 
-pub async fn load_client_id<C>(
-    config: Arc<RwLock<Config<C>>>,
-) -> Result<Bytes32, Error> {
+pub async fn load_client_id<C>(config: Arc<RwLock<Config<C>>>) -> Result<Bytes32, Error> {
     let ssl_path = {
         let config = config.read().await;
         get_ssl_root_path(&*config).join(Path::new(crate::farmer::HARVESTER_CRT))

@@ -29,7 +29,10 @@ const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
 const UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL: u64 = 120;
 const UPDATE_POOL_FARMER_INFO_INTERVAL: u64 = 300;
 
-pub async fn pool_updater<T, C>(shared_state: Arc<FarmerSharedState<T>>, config: Arc<RwLock<Config<C>>>) {
+pub async fn pool_updater<T, C>(
+    shared_state: Arc<FarmerSharedState<T>>,
+    config: Arc<RwLock<Config<C>>>,
+) {
     let mut last_update = Instant::now();
     let mut first = true;
     let pool_client = Arc::new(DefaultPoolClient::new());
@@ -41,8 +44,12 @@ pub async fn pool_updater<T, C>(shared_state: Arc<FarmerSharedState<T>>, config:
             || Instant::now().duration_since(last_update).as_secs() >= 60
         {
             debug!("Updating Pool State");
-            if let Err(e) =
-                update_pool_state(pool_client.clone(), &*config.read().await, shared_state.clone()).await
+            if let Err(e) = update_pool_state(
+                pool_client.clone(),
+                &*config.read().await,
+                shared_state.clone(),
+            )
+            .await
             {
                 error!("Error updating Pool State: {}", e);
                 tokio::time::sleep(Duration::from_secs(10)).await;
