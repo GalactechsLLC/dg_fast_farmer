@@ -177,7 +177,7 @@ where
                                 handshake.software_version
                             );
                         } else {
-                            error!("Failed to read chia versio0n from client handshake");
+                            error!("Failed to read chia version from client handshake");
                         }
                         *s.full_node_client.write().await = Some(c);
                         if let Err(e) = s
