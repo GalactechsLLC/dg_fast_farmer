@@ -552,8 +552,7 @@ impl<
                 };
                 debug!(
                     "Submitting partial for {} to {}",
-                    post_request.payload.launcher_id.to_string(),
-                    &pool_url
+                    post_request.payload.launcher_id, &pool_url
                 );
                 if let Some(v) = self
                     .shared_state

@@ -44,10 +44,10 @@ pub async fn metrics(
         CONTENT_TYPE,
         HeaderValue::from_static("text/plain; version=0.0.4"),
     );
-    if let Some(metrics) = state.0.metrics.read().await.as_ref() {
+    if let Some(m) = state.0.metrics.read().await.as_ref() {
         let encoder = TextEncoder::new();
         encoder
-            .encode_to_string(&metrics.registry.read().await.gather())
+            .encode_to_string(&m.registry.read().await.gather())
             .map_err(|e| {
                 Error::new(
                     ErrorKind::InvalidData,

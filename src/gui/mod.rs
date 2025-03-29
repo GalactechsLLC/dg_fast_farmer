@@ -80,11 +80,11 @@ pub async fn bootstrap<
 >(
     shared_state: Arc<FarmerSharedState<T>>,
     config: Arc<RwLock<Config<C>>>,
-    harvester: Arc<H>,
 ) -> Result<(), Error> {
     init_logger(LevelFilter::Info).unwrap();
     set_default_level(LevelFilter::Info);
     enable_raw_mode()?;
+    let harvester = H::load(shared_state.clone(), config.clone()).await?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
@@ -169,7 +169,7 @@ pub async fn bootstrap<
                 _ = ServerBuilder::default()
                     .host("0.0.0.0".to_string())
                     .port(metrics_settings.port)
-                    .shared_state(metrics_state.clone())
+                    .shared_state::<Arc<FarmerSharedState<T>>>(metrics_state.clone())
                     .register(metrics)
                     .build().run()
                 => {

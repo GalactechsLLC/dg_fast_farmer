@@ -91,13 +91,11 @@ pub type NewProofHandler =
 
 pub async fn run(args: RunArgs<()>, config: Config<()>) -> Result<(), Error> {
     let config = Arc::new(RwLock::new(config));
-    let harvester = DruidGardenHarvester::load(args.shared_state.clone(), config.clone()).await?;
     match args.mode {
         RunMode::Cli => {
             cli_mode::<(), DruidGardenHarvester<()>, (), NewProofHandler, SignaturesHandler>(
                 args.shared_state,
                 config,
-                harvester,
             )
             .await
         }
@@ -105,7 +103,6 @@ pub async fn run(args: RunArgs<()>, config: Config<()>) -> Result<(), Error> {
             tui_mode::<(), DruidGardenHarvester<()>, (), NewProofHandler, SignaturesHandler>(
                 args.shared_state,
                 config,
-                harvester,
             )
             .await
         }
@@ -115,7 +112,6 @@ pub async fn run(args: RunArgs<()>, config: Config<()>) -> Result<(), Error> {
 pub async fn run_with_custom_harvester<T, H, C, O, S>(
     args: RunArgs<T>,
     config: Arc<RwLock<Config<C>>>,
-    harvester: Arc<H>,
 ) -> Result<(), Error>
 where
     T: Sync + Send + 'static,
@@ -125,8 +121,8 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
     match args.mode {
-        RunMode::Cli => cli_mode::<T, H, C, O, S>(args.shared_state, config, harvester).await,
-        RunMode::Tui => tui_mode::<T, H, C, O, S>(args.shared_state, config, harvester).await,
+        RunMode::Cli => cli_mode::<T, H, C, O, S>(args.shared_state, config).await,
+        RunMode::Tui => tui_mode::<T, H, C, O, S>(args.shared_state, config).await,
     }
 }
 
@@ -176,14 +172,9 @@ where
                 ..Default::default()
             });
             let config = Arc::new(RwLock::new(config));
-            let harvester = H::load(shared_state.clone(), config.clone()).await?;
             match mode.unwrap_or_default() {
-                cli::RunMode::Cli => {
-                    cli_mode::<T, H, C, O, S>(shared_state, config, harvester).await
-                }
-                cli::RunMode::Tui => {
-                    tui_mode::<T, H, C, O, S>(shared_state, config, harvester).await
-                }
+                cli::RunMode::Cli => cli_mode::<T, H, C, O, S>(shared_state, config).await,
+                cli::RunMode::Tui => tui_mode::<T, H, C, O, S>(shared_state, config).await,
             }
         }
         Action::Init {

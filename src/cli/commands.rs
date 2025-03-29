@@ -46,7 +46,6 @@ use tokio::task::JoinHandle;
 pub async fn tui_mode<T, H, C, O, S>(
     shared_state: Arc<FarmerSharedState<T>>,
     config: Arc<RwLock<Config<C>>>,
-    harvester: Arc<H>,
 ) -> Result<(), Error>
 where
     T: Sync + Send + 'static,
@@ -55,14 +54,13 @@ where
     O: ProofHandler<T, H, C> + Sync + Send + 'static,
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
-    gui::bootstrap::<T, C, H, O, S>(shared_state, config, harvester).await?;
+    gui::bootstrap::<T, C, H, O, S>(shared_state, config).await?;
     Ok(())
 }
 
 pub async fn cli_mode<T, H, C, O, S>(
     shared_state: Arc<FarmerSharedState<T>>,
     config: Arc<RwLock<Config<C>>>,
-    harvester: Arc<H>,
 ) -> Result<(), Error>
 where
     T: Sync + Send + 'static,
@@ -72,6 +70,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
     init_logger();
+    let harvester = H::load(shared_state.clone(), config.clone()).await?;
     let constants = CONSENSUS_CONSTANTS_MAP
         .get(&config.read().await.selected_network)
         .unwrap_or(&MAINNET);
@@ -126,7 +125,7 @@ where
             ServerBuilder::default()
                 .host("0.0.0.0".to_string())
                 .port(metrics_settings.port)
-                .shared_state(shared_state.clone())
+                .shared_state::<Arc<FarmerSharedState<T>>>(shared_state.clone())
                 .register(metrics)
                 .build()
                 .run(),
@@ -377,7 +376,7 @@ pub async fn update_pool_info(
     ) -> Result<(), Error> {
         info!(
             "Fetching current PlotNFT state for launcher id {} ...",
-            launcher_id.to_string()
+            launcher_id
         );
         plot_nfts.extend(
             get_plotnft_by_launcher_id(client.clone(), launcher_id, last_known_coin_name).await?,
@@ -449,12 +448,12 @@ pub async fn update_pool_info(
             if change_messages.is_empty() {
                 info!(
                     "PlotNFT state for launcher id {} did not change",
-                    plot_nft.launcher_id.to_string(),
+                    plot_nft.launcher_id,
                 );
             } else {
                 info!(
                     "PlotNFT state for launcher id {} did change {}",
-                    plot_nft.launcher_id.to_string(),
+                    plot_nft.launcher_id,
                     change_messages.join(" and "),
                 );
             }
