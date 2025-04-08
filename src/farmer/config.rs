@@ -55,6 +55,7 @@ pub struct HarvesterConfig<C = ()> {
     #[serde(default = "default_none")]
     pub druid_garden: Option<DruidGardenHarvesterConfig>,
     #[serde(default = "default_none")]
+    #[serde(alias = "gigahorse")] //Support Legacy Gigahorse Configs
     pub custom_config: Option<C>,
 }
 
