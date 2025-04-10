@@ -28,6 +28,7 @@ dg_xch_cli = { path="./dg_xch_utils/cli", version="2.0.3" }
 dg_xch_clients = { path="./dg_xch_utils/clients", version="2.0.3", features = ["metrics"] }
 dg_xch_core = { path="./dg_xch_utils/core", version = "2.0.3", default-features = false, features = ["metrics"] }
 dg_xch_keys = { path="./dg_xch_utils/keys", version="2.0.3" }
+dg_logger = { path="./dg_xch_utils/logging", version="2.0.3" }
 dg_xch_pos = { path="./dg_xch_utils/proof_of_space", version="2.0.3" }
 dg_xch_puzzles = { path="./dg_xch_utils/puzzles", version="2.0.3" }
 dg_xch_serialize = { path="./dg_xch_utils/serialize", version="2.0.3" }
@@ -42,7 +43,6 @@ rand = "0.8.5"
 ratatui = "0.29.0"
 serde = {version="1.0.218", features = ["derive"]}
 serde_yaml = "0.9.33"
-simple_logger = "5.0.0"
 sysinfo = "0.33.1"
 time = "0.3.37"
 tokio = {version = "1.43.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}

@@ -8,9 +8,10 @@ use crate::farmer::Farmer;
 use crate::farmer::config::{Config, DruidGardenHarvesterConfig, FarmingInfo};
 use crate::gui;
 use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
-use crate::metrics::metrics;
+use crate::metrics::{farmer_state, log_stream, metrics};
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
+use dg_logger::DruidGardenLogger;
 use dg_xch_cli_lib::wallet_commands::migrate_plot_nft;
 use dg_xch_cli_lib::wallets::plotnft_utils::{get_plotnft_by_launcher_id, scrounge_for_plotnfts};
 use dg_xch_clients::api::pool::DefaultPoolClient;
@@ -69,7 +70,7 @@ where
     O: ProofHandler<T, H, C> + Sync + Send + 'static,
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
-    init_logger();
+    let logger = init_logger()?;
     let harvester = H::load(shared_state.clone(), config.clone()).await?;
     let constants = CONSENSUS_CONSTANTS_MAP
         .get(&config.read().await.selected_network)
@@ -125,8 +126,13 @@ where
             ServerBuilder::default()
                 .host("0.0.0.0".to_string())
                 .port(metrics_settings.port)
-                .shared_state::<Arc<FarmerSharedState<T>>>(shared_state.clone())
-                .register(metrics)
+                .shared_state::<FarmerSharedState<T>>(shared_state)
+                .shared_state::<DruidGardenLogger>(logger)
+                .register(metrics::<T>::default())
+                .register(farmer_state::<T>::default())
+                .register(log_stream {
+                    peers: Default::default(),
+                })
                 .build()
                 .run(),
         )

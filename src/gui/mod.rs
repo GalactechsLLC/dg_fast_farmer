@@ -170,7 +170,7 @@ pub async fn bootstrap<
                     .host("0.0.0.0".to_string())
                     .port(metrics_settings.port)
                     .shared_state::<Arc<FarmerSharedState<T>>>(metrics_state.clone())
-                    .register(metrics)
+                    .register(metrics::<T>::default())
                     .build().run()
                 => {
                     Ok(())

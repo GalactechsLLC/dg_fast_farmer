@@ -1,5 +1,6 @@
 use crate::farmer::config::Config;
 use crate::farmer::{CA_PRIVATE_CRT, PRIVATE_CRT, PRIVATE_KEY};
+use dg_logger::{DruidGardenLogger, TimestampFormat};
 use dg_xch_clients::ClientSSLConfig;
 use dg_xch_clients::rpc::full_node::FullnodeClient as RpcClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
@@ -7,8 +8,7 @@ use dg_xch_core::ssl::load_certs_from_bytes;
 use dg_xch_core::traits::SizedBytes;
 use dg_xch_core::utils::hash_256;
 use home::home_dir;
-use log::LevelFilter;
-use simple_logger::SimpleLogger;
+use log::Level;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -87,13 +87,13 @@ pub fn is_community_node<C>(config: &Config<C>) -> bool {
         .contains(&config.fullnode_rpc_host.to_ascii_lowercase().trim())
 }
 
-pub fn init_logger() {
-    SimpleLogger::new()
-        .with_colors(true)
-        .with_level(LevelFilter::Info)
-        .env()
+pub fn init_logger() -> Result<Arc<DruidGardenLogger>, Error> {
+    DruidGardenLogger::build()
+        .use_colors(true)
+        .current_level(Level::Info)
+        .timestamp_format(TimestampFormat::Local)
         .init()
-        .unwrap_or_default();
+        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
 }
 
 pub fn check_config(config_path: &Path) -> Result<(), Error> {

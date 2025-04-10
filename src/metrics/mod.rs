@@ -1,18 +1,23 @@
 use crate::_version;
 use crate::cli::utils::get_device_id_path;
-use crate::farmer::ExtendedFarmerSharedState;
-use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState};
-use log::info;
-use portfu::macros::get;
+use dg_logger::DruidGardenLogger;
+use dg_xch_core::blockchain::blockchain_state::BlockchainState;
+use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState, PlotCounts};
+use log::{Level, debug, error, info};
+use portfu::macros::{get, websocket};
 use portfu::prelude::http::HeaderValue;
 use portfu::prelude::http::header::CONTENT_TYPE;
+use portfu::prelude::tokio_tungstenite::tungstenite::Message;
 use portfu::prelude::*;
 use prometheus::{Registry, TextEncoder};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind};
+use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 pub fn get_metrics() -> FarmerMetrics {
@@ -29,8 +34,8 @@ pub fn get_metrics() -> FarmerMetrics {
 }
 
 #[get("/metrics")]
-pub async fn metrics(
-    state: State<Arc<FarmerSharedState<ExtendedFarmerSharedState>>>,
+pub async fn metrics<T: Sync + Send + 'static>(
+    state: State<Arc<FarmerSharedState<T>>>,
     data: &mut ServiceData,
 ) -> Result<String, Error> {
     if let Some(farmer_metrics) = state.0.metrics.read().await.as_ref() {
@@ -56,6 +61,116 @@ pub async fn metrics(
             })
     } else {
         Err(Error::new(ErrorKind::NotFound, "No metrics were created"))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SerialPlotCounts {
+    pub og_plot_count: u64,
+    pub nft_plot_count: u64,
+    pub compresses_plot_count: u64,
+    pub invalid_plot_count: u64,
+    pub total_plot_space: u64,
+}
+impl From<&PlotCounts> for SerialPlotCounts {
+    fn from(counts: &PlotCounts) -> Self {
+        Self {
+            og_plot_count: counts.og_plot_count.load(Ordering::Relaxed),
+            nft_plot_count: counts.nft_plot_count.load(Ordering::Relaxed),
+            compresses_plot_count: counts.compresses_plot_count.load(Ordering::Relaxed),
+            invalid_plot_count: counts.invalid_plot_count.load(Ordering::Relaxed),
+            total_plot_space: counts.total_plot_space.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FarmerPublicState {
+    pub running: bool,
+    pub plot_counts: SerialPlotCounts,
+    pub blockchain_state: Option<BlockchainState>,
+}
+
+#[get("/state", output = "json", eoutput = "bytes")]
+pub async fn farmer_state<T: Sync + Send + 'static>(
+    state: State<FarmerSharedState<T>>,
+) -> Result<FarmerPublicState, Error> {
+    Ok(FarmerPublicState {
+        running: state.0.signal.load(Ordering::Relaxed),
+        plot_counts: state.0.plot_counts.as_ref().into(),
+        blockchain_state: state
+            .0
+            .fullnode_state
+            .read()
+            .await
+            .as_ref()
+            .map(|v| v.clone()),
+    })
+}
+
+#[websocket("/log_stream/{level}")]
+pub async fn log_stream(
+    socket: WebSocket,
+    level: Path,
+    logger: State<DruidGardenLogger>,
+) -> Result<(), Error> {
+    let mut err = None;
+    let level = level.inner();
+    let level = Level::from_str(level.as_str()).map_err(|e| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            format!("{} is not a valid Log Level: {e:?}", level),
+        )
+    })?;
+    let mut receiver = logger.0.subscribe(level)?;
+    loop {
+        tokio::select! {
+            result = receiver.recv() => {
+                match result {
+                    Ok(log_entry) => {
+                        if let Err(e) = socket.send(Message::Text(log_entry)).await {
+                            debug!("Failed to send log entry: {e:?}");
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to read message from log channel: {e:?}");
+                        break;
+                    }
+                }
+            }
+            result = socket.next() => {
+                match result {
+                    Ok(Some(msg)) => {
+                        match msg {
+                            Message::Ping(ping_data) => {
+                                socket.send(Message::Pong(ping_data)).await?;
+                            }
+                            Message::Pong(_) | Message::Frame(_) |
+                            Message::Binary(_) | Message::Text(_) => {
+                                //Ignore Client Messages
+                                continue;
+                            }
+                            Message::Close(_close_msg) => {
+                                info!("MPC Stream received Close");
+                                break;
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    },
+                    Err(e) => {
+                        err = Some(e);
+                        break
+                    },
+                }
+            }
+        }
+    }
+    match err {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 

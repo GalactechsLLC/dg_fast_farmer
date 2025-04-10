@@ -189,7 +189,7 @@ where
             mnemonic_file,
             launcher_id,
         } => {
-            init_logger();
+            let _logger = init_logger();
             generate_config_from_mnemonic(
                 GenerateConfig {
                     output_path: Some(config_path),
@@ -214,7 +214,7 @@ where
         }
         Action::Update {} => {
             check_config(&config_path)?;
-            init_logger();
+            let _logger = init_logger();
             let config = Config::try_from(&config_path)?;
             let updated_config = update(config).await?;
             updated_config.save_as_yaml(config_path)?;
@@ -222,7 +222,7 @@ where
         }
         Action::UpdatePoolInfo { launcher_id } => {
             check_config(&config_path)?;
-            init_logger();
+            let _logger = init_logger();
             let config = Config::try_from(&config_path)?;
             let updated_config = update_pool_info(config, launcher_id, None).await?;
             updated_config.save_as_yaml(config_path)?;
@@ -230,7 +230,7 @@ where
         }
         Action::UpdatePayoutAddress { address } => {
             check_config(&config_path)?;
-            init_logger();
+            let _logger = init_logger();
             let mut config = Config::try_from(&config_path)?;
             let payout_address = parse_payout_address(&address)?;
             let xch_address = encode_puzzle_hash(&Bytes32::from_str(&payout_address)?, "xch")?;
@@ -248,7 +248,7 @@ where
             fee,
         } => {
             check_config(&config_path)?;
-            init_logger();
+            let _logger = init_logger();
             let config = Config::try_from(&config_path).unwrap();
             let updated_config =
                 join_pool(config, pool_url, mnemonic_file, launcher_id, fee).await?;

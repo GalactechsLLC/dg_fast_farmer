@@ -3,7 +3,6 @@ use crate::cli::utils::{get_ssl_root_path, load_client_id};
 use crate::farmer::config::Config;
 use crate::farmer::protocols::fullnode::new_signage_point::NewSignagePointHandle;
 use crate::farmer::protocols::fullnode::request_signed_values::RequestSignedValuesHandle;
-use crate::gui::FullNodeState;
 use crate::harvesters::druid_garden::DruidGardenHarvester;
 use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
 use dg_xch_clients::ClientSSLConfig;
@@ -41,18 +40,6 @@ pub static PRIVATE_KEY: &str = "farmer/private_farmer.key";
 pub static CA_PRIVATE_CRT: &str = "ca/private_ca.crt";
 
 pub static HARVESTER_CRT: &str = "harvester/private_harvester.crt";
-
-#[derive(Clone)]
-pub struct ExtendedFarmerSharedState {
-    pub fullnode_state: Arc<RwLock<Option<FullNodeState>>>,
-}
-impl Default for ExtendedFarmerSharedState {
-    fn default() -> Self {
-        Self {
-            fullnode_state: Arc::new(Default::default()),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PathInfo {
