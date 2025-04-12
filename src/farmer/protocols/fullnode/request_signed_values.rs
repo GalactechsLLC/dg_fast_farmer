@@ -25,7 +25,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     pub id: Uuid,
     pub shared_state: Arc<FarmerSharedState<T>>,
@@ -43,7 +43,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     async fn handle(
         &self,

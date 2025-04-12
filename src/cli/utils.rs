@@ -30,7 +30,7 @@ pub(crate) fn get_device_id_path() -> PathBuf {
     get_root_path().as_path().join(Path::new("device_id.bin"))
 }
 
-pub fn get_ssl_root_path<C>(config: &Config<C>) -> PathBuf {
+pub fn get_ssl_root_path<C: Clone>(config: &Config<C>) -> PathBuf {
     if let Some(ssl_root_path) = &config.ssl_root_path {
         PathBuf::from(ssl_root_path)
     } else {
@@ -38,7 +38,7 @@ pub fn get_ssl_root_path<C>(config: &Config<C>) -> PathBuf {
     }
 }
 
-pub(crate) fn rpc_client_from_config<C>(
+pub(crate) fn rpc_client_from_config<C: Clone>(
     config: &Config<C>,
     headers: &Option<HashMap<String, String>>,
 ) -> Result<Arc<RpcClient>, Error> {
@@ -68,7 +68,7 @@ pub(crate) fn rpc_client_from_config<C>(
     )?))
 }
 
-pub async fn load_client_id<C>(config: Arc<RwLock<Config<C>>>) -> Result<Bytes32, Error> {
+pub async fn load_client_id<C: Clone>(config: Arc<RwLock<Config<C>>>) -> Result<Bytes32, Error> {
     let ssl_path = {
         let config = config.read().await;
         get_ssl_root_path(&*config).join(Path::new(crate::farmer::HARVESTER_CRT))
@@ -82,7 +82,7 @@ pub async fn load_client_id<C>(config: Arc<RwLock<Config<C>>>) -> Result<Bytes32
     Ok(Bytes32::new(hash_256(cert)))
 }
 
-pub fn is_community_node<C>(config: &Config<C>) -> bool {
+pub fn is_community_node<C: Clone>(config: &Config<C>) -> bool {
     ["druid.garden", "dev.druid.garden"]
         .contains(&config.fullnode_rpc_host.to_ascii_lowercase().trim())
 }

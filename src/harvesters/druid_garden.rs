@@ -62,8 +62,8 @@ pub struct DruidGardenHarvester<T: Send + Sync + 'static> {
     pub shared_state: Arc<FarmerSharedState<T>>,
 }
 #[async_trait]
-impl<T: Send + Sync + 'static, C: Send + Sync + 'static> Harvester<T, DruidGardenHarvester<T>, C>
-    for DruidGardenHarvester<T>
+impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
+    Harvester<T, DruidGardenHarvester<T>, C> for DruidGardenHarvester<T>
 {
     async fn load(
         shared_state: Arc<FarmerSharedState<T>>,

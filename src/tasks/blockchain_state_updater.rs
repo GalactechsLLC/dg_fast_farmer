@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-pub async fn update_blockchain<T, C>(
+pub async fn update_blockchain<T, C: Clone>(
     farmer_state: Arc<FarmerSharedState<T>>,
     gui_state: Option<Arc<GuiState<T>>>,
     config: Arc<RwLock<Config<C>>>,

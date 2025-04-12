@@ -32,7 +32,7 @@ where
     P: PoolClient + Sized + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     pub pool_client: Arc<P>,
     pub shared_state: Arc<FarmerSharedState<T>>,
@@ -47,7 +47,7 @@ where
     P: PoolClient + Default + Sized + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     async fn load(
         shared_state: Arc<FarmerSharedState<T>>,
