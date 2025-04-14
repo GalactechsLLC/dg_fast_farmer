@@ -122,15 +122,18 @@ pub async fn log_stream(
             format!("{} is not a valid Log Level: {e:?}", level),
         )
     })?;
-    let mut receiver = logger.0.subscribe(level)?;
+    let mut receiver = logger.0.subscribe();
     loop {
         tokio::select! {
             result = receiver.recv() => {
                 match result {
                     Ok(log_entry) => {
-                        if let Err(e) = socket.send(Message::Text(log_entry)).await {
-                            debug!("Failed to send log entry: {e:?}");
-                            break;
+                        if log_entry.level <= level {
+                            let as_json = serde_json::to_string(&log_entry)?;
+                            if let Err(e) = socket.send(Message::Text(as_json)).await {
+                                debug!("Failed to send log entry: {e:?}");
+                                break;
+                            }
                         }
                     }
                     Err(e) => {
