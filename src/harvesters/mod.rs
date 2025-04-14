@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[async_trait]
-pub trait SignatureHandler<T: 'static, H: 'static, C: 'static> {
+pub trait SignatureHandler<T: 'static, H: 'static, C: Clone + 'static> {
     async fn load(
         shared_state: Arc<FarmerSharedState<T>>,
         config: Arc<RwLock<Config<C>>>,
@@ -26,7 +26,7 @@ pub trait SignatureHandler<T: 'static, H: 'static, C: 'static> {
 impl<
     T: Sync + Send + 'static,
     H: Sync + Send + 'static,
-    C: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
     S: SignatureHandler<T, H, C> + Send + Sync + 'static,
 > SignatureHandler<T, H, C> for Arc<S>
 {
@@ -46,7 +46,7 @@ impl<
 }
 
 #[async_trait]
-pub trait ProofHandler<T: 'static, H: 'static, C: 'static> {
+pub trait ProofHandler<T: 'static, H: 'static, C: Clone + 'static> {
     async fn load(
         shared_state: Arc<FarmerSharedState<T>>,
         config: Arc<RwLock<Config<C>>>,
@@ -59,7 +59,7 @@ pub trait ProofHandler<T: 'static, H: 'static, C: 'static> {
 impl<
     T: Sync + Send + 'static,
     H: Sync + Send + 'static,
-    C: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
     O: ProofHandler<T, H, C> + Send + Sync + 'static,
 > ProofHandler<T, H, C> for Arc<O>
 {
@@ -79,7 +79,7 @@ impl<
 }
 
 #[async_trait]
-pub trait Harvester<T: 'static, H: 'static, C: 'static> {
+pub trait Harvester<T: 'static, H: 'static, C: Clone + 'static> {
     async fn load(
         shared_state: Arc<FarmerSharedState<T>>,
         config: Arc<RwLock<Config<C>>>,

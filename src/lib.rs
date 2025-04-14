@@ -19,7 +19,7 @@ use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
 use dg_xch_serialize::ChiaProtocolVersion;
 use once_cell::sync::Lazy;
 use portfu::prelude::http::header::USER_AGENT;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::{env, fs};
 use std::io::{Error, ErrorKind};
@@ -118,7 +118,7 @@ pub async fn run_with_custom_harvester<T, H, C, O, S>(
 where
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
     O: ProofHandler<T, H, C> + Sync + Send + 'static,
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
@@ -132,7 +132,7 @@ pub async fn cli<T, H, C, O, S>(additional_state: Arc<T>) -> Result<(), Error>
 where
     T: Default + Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: for<'a> Deserialize<'a> + Sync + Send + 'static,
+    C: for<'a> Deserialize<'a> + Sync + Send + Clone + Serialize + 'static,
     O: ProofHandler<T, H, C> + Sync + Send + 'static,
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
@@ -217,23 +217,23 @@ where
         Action::Update {} => {
             check_config(&config_path)?;
             let _logger = init_logger();
-            let config = Config::try_from(&config_path)?;
-            let updated_config = update(config).await?;
+            let config = Config::<C>::try_from(&config_path)?;
+            let updated_config = update::<C>(config).await?;
             updated_config.save_as_yaml(config_path)?;
             Ok(())
         }
         Action::UpdatePoolInfo { launcher_id } => {
             check_config(&config_path)?;
             let _logger = init_logger();
-            let config = Config::try_from(&config_path)?;
-            let updated_config = update_pool_info(config, launcher_id, None).await?;
+            let config = Config::<C>::try_from(&config_path)?;
+            let updated_config = update_pool_info::<C>(config, launcher_id, None).await?;
             updated_config.save_as_yaml(config_path)?;
             Ok(())
         }
         Action::UpdatePayoutAddress { address } => {
             check_config(&config_path)?;
             let _logger = init_logger();
-            let mut config = Config::try_from(&config_path)?;
+            let mut config = Config::<C>::try_from(&config_path)?;
             let payout_address = parse_payout_address(&address)?;
             let xch_address = encode_puzzle_hash(&Bytes32::from_str(&payout_address)?, "xch")?;
             for pool_info in &mut config.pool_info {
@@ -251,9 +251,9 @@ where
         } => {
             check_config(&config_path)?;
             let _logger = init_logger();
-            let config = Config::try_from(&config_path).unwrap();
+            let config = Config::<C>::try_from(&config_path).unwrap();
             let updated_config =
-                join_pool(config, pool_url, mnemonic_file, launcher_id, fee).await?;
+                join_pool::<C>(config, pool_url, mnemonic_file, launcher_id, fee).await?;
             updated_config.save_as_yaml(config_path)?;
             Ok(())
         }

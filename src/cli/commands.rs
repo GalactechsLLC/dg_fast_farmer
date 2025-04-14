@@ -51,7 +51,7 @@ pub async fn tui_mode<T, H, C, O, S>(
 where
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
     O: ProofHandler<T, H, C> + Sync + Send + 'static,
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
@@ -66,7 +66,7 @@ pub async fn cli_mode<T, H, C, O, S>(
 where
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
     O: ProofHandler<T, H, C> + Sync + Send + 'static,
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
 {
@@ -367,11 +367,11 @@ pub async fn generate_config_from_mnemonic(
     Ok(config)
 }
 
-pub async fn update_pool_info(
-    config: Config,
+pub async fn update_pool_info<C: Clone>(
+    config: Config<C>,
     launcher_id: Option<String>,
     last_known_coin_name: Option<Bytes32>,
-) -> Result<Config, Error> {
+) -> Result<Config<C>, Error> {
     let client = rpc_client_from_config(&config, &None)?;
     #[inline]
     async fn handle_launcher_id(
@@ -468,13 +468,13 @@ pub async fn update_pool_info(
     Ok(updated_config)
 }
 
-pub async fn join_pool(
-    config: Config,
+pub async fn join_pool<C: Clone>(
+    config: Config<C>,
     pool_url: String,
     mnemonic_file: Option<String>,
     launcher_id: Option<String>,
     fee: Option<u64>,
-) -> Result<Config, Error> {
+) -> Result<Config<C>, Error> {
     let client = rpc_client_from_config(&config, &None)?;
     let mnemonic = prompt_for_mnemonic(mnemonic_file, None, true)?;
     let mut found = false;
@@ -527,7 +527,7 @@ pub async fn join_pool(
     }
     update_pool_info(config, launcher_id, None).await
 }
-pub async fn update(config: Config) -> Result<Config, Error> {
+pub async fn update<C: Clone>(config: Config<C>) -> Result<Config<C>, Error> {
     let mut config = config;
     config.payout_address =
         prompt_for_payout_address(Some(config.payout_address.clone()))?.to_string();

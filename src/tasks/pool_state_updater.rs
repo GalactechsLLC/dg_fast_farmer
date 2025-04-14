@@ -29,7 +29,7 @@ const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
 const UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL: u64 = 120;
 const UPDATE_POOL_FARMER_INFO_INTERVAL: u64 = 300;
 
-pub async fn pool_updater<T, C>(
+pub async fn pool_updater<T, C: Clone>(
     shared_state: Arc<FarmerSharedState<T>>,
     config: Arc<RwLock<Config<C>>>,
 ) {
@@ -301,7 +301,7 @@ pub async fn update_pool_farmer_info<T, P: PoolClient + Sized + Sync + Send>(
     Ok(response)
 }
 
-pub async fn update_pool_state<'a, T, C, P: 'a + PoolClient + Sized + Sync + Send>(
+pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Sync + Send>(
     client: Arc<P>,
     config: &Config<C>,
     shared_state: Arc<FarmerSharedState<T>>,

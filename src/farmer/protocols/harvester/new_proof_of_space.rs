@@ -42,7 +42,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     pub pool_client: Arc<P>,
     pub shared_state: Arc<FarmerSharedState<T>>,
@@ -60,7 +60,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     async fn load(
         shared_state: Arc<FarmerSharedState<T>>,
@@ -187,7 +187,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     async fn _handle_proof(&self, sp: &NewSignagePoint, qs: &Bytes32, new_pos: &NewProofOfSpace) {
         match self
@@ -430,7 +430,7 @@ where
 
 pub struct PartialHandler<
     T: Sync + Send + 'static,
-    C: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
     P: PoolClient + Default + Sized + Sync + Send + 'static,
 > {
     pub pool_client: Arc<P>,
@@ -447,7 +447,7 @@ pub struct PartialHandler<
 impl<
     T: Sync + Send + 'static,
     H: Sync + Send + 'static,
-    C: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
     P: PoolClient + Default + Sized + Sync + Send + 'static,
 > SignatureHandler<T, H, C> for PartialHandler<T, C, P>
 {

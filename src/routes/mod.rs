@@ -104,21 +104,21 @@ pub async fn log_stream(
             format!("{} is not a valid Log Level: {e:?}", level),
         )
     })?;
-    let events = logger.0.recent_events.read().await.iter().cloned().collect::<Vec<_>>();
-    let mut receiver = logger.0.subscribe(level)?;
-    for event in events {
-        let _ = socket.send(Message::Text(serde_json::to_string(&event).map_err(|e| {
-            Error::new(ErrorKind::InvalidInput, format!("Failed to send log event: {e:?}"))
-        })?)).await;
+    let mut msgs = vec![];
+    for msg in logger.0.buffer.read().await.iter() {
+        msgs.push(Message::Text(serde_json::to_string(msg)?));
     }
+    let mut receiver = logger.0.subscribe();
+    socket.send_all(msgs).await?;
     loop {
         tokio::select! {
             result = receiver.recv() => {
                 match result {
-                    Ok(log_event) => {
-                        if let Ok(json) = serde_json::to_string(&log_event) {
-                            if let Err(e) = socket.send(Message::Text(json)).await {
-                                debug!("Failed to send log event: {e:?}");
+                    Ok(log_entry) => {
+                        if log_entry.level <= level {
+                            let as_json = serde_json::to_string(&log_entry)?;
+                            if let Err(e) = socket.send(Message::Text(as_json)).await {
+                                debug!("Failed to send log entry: {e:?}");
                                 break;
                             }
                         }

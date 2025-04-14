@@ -65,8 +65,8 @@ impl<T> GuiState<T> {
 }
 
 pub async fn bootstrap<
-    T: Send + Sync + 'static,
-    C: Send + Sync + 'static,
+    T: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
     O: ProofHandler<T, H, C> + Sync + Send + 'static,
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,

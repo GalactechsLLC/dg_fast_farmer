@@ -85,7 +85,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     shared_state: Arc<FarmerSharedState<T>>,
     harvester: Arc<H>,
@@ -102,7 +102,7 @@ where
     S: SignatureHandler<T, H, C> + Sync + Send + 'static,
     T: Sync + Send + 'static,
     H: Harvester<T, H, C> + Sync + Send + 'static,
-    C: Send + Sync + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     pub async fn new(
         shared_state: Arc<FarmerSharedState<T>>,

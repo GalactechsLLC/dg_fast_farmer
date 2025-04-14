@@ -2,8 +2,8 @@ use blst::min_pk::SecretKey;
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::config::PoolWalletConfig;
 use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
-use dg_xch_keys::decode_puzzle_hash;
-use serde::Deserialize;
+use dg_xch_keys::parse_payout_address;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind};
@@ -60,7 +60,10 @@ pub struct HarvesterConfig<C = ()> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Config<C = ()> {
+pub struct Config<C = ()>
+where
+    C: Clone,
+{
     pub selected_network: String,
     pub ssl_root_path: Option<String>,
     pub fullnode_ws_host: String,
@@ -73,7 +76,7 @@ pub struct Config<C = ()> {
     pub harvester_configs: HarvesterConfig<C>,
     pub metrics: Option<MetricsConfig>,
 }
-impl Config {
+impl<C: Clone + Serialize> Config<C> {
     pub fn save_as_yaml<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
         fs::write(
             path.as_ref(),
@@ -90,7 +93,7 @@ impl Config {
             && self.fullnode_ws_port != 0
             && self.fullnode_rpc_port != 0
             && !self.farmer_info.is_empty()
-            && decode_puzzle_hash(&self.payout_address).is_ok()
+            && parse_payout_address(&self.payout_address).is_ok()
             && self.pool_info.iter().all(|c| {
                 self.farmer_info
                     .iter()
@@ -99,7 +102,7 @@ impl Config {
     }
 }
 
-impl<C> Default for Config<C> {
+impl<C: Clone> Default for Config<C> {
     fn default() -> Self {
         Config {
             selected_network: "mainnet".to_string(),
@@ -122,21 +125,21 @@ impl<C> Default for Config<C> {
         }
     }
 }
-impl<C: for<'a> Deserialize<'a>> TryFrom<&Path> for Config<C> {
+impl<C: for<'a> Deserialize<'a> + Clone> TryFrom<&Path> for Config<C> {
     type Error = Error;
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
         serde_yaml::from_str::<Config<C>>(&fs::read_to_string(value)?)
             .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))
     }
 }
-impl<C: for<'a> Deserialize<'a>> TryFrom<&PathBuf> for Config<C> {
+impl<C: for<'a> Deserialize<'a> + Clone> TryFrom<&PathBuf> for Config<C> {
     type Error = Error;
     fn try_from(value: &PathBuf) -> Result<Config<C>, Self::Error> {
         Config::<C>::try_from(value.as_path())
     }
 }
 
-pub async fn load_keys<C>(
+pub async fn load_keys<C: Clone>(
     config: &Config<C>,
 ) -> (
     HashMap<Bytes48, SecretKey>,
