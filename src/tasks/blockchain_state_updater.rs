@@ -1,6 +1,5 @@
 use crate::cli::utils::rpc_client_from_config;
 use crate::farmer::config::Config;
-use crate::gui::{FullNodeState, GuiState};
 use dg_xch_clients::api::full_node::FullnodeAPI;
 use dg_xch_core::protocols::farmer::FarmerSharedState;
 use log::error;
@@ -11,7 +10,6 @@ use tokio::sync::RwLock;
 
 pub async fn update_blockchain<T, C>(
     farmer_state: Arc<FarmerSharedState<T>>,
-    gui_state: Option<Arc<GuiState<T>>>,
     config: Arc<RwLock<Config<C>>>,
 ) {
     let config = config.read().await;
@@ -41,11 +39,7 @@ pub async fn update_blockchain<T, C>(
                             .blockchain_netspace
                             .set((bc_state.space / 1024u128 / 1024u128 / 1024u128) as u64); //Convert to GiB for better fitting into u64
                     }
-                    if let Some(gui_state) = &gui_state {
-                        *gui_state.full_node_state.write().await = FullNodeState {
-                            blockchain_state: bc_state,
-                        };
-                    }
+                    *farmer_state.fullnode_state.write().await = Some(bc_state);
                 }
                 Err(e) => {
                     error!("{:?}", e);

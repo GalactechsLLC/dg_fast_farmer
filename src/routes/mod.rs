@@ -1,39 +1,21 @@
-use crate::_version;
-use crate::cli::utils::get_device_id_path;
-use dg_logger::DruidGardenLogger;
+use dg_logger::{DruidGardenLogger};
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
-use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState, PlotCounts};
+use dg_xch_core::protocols::farmer::{FarmerSharedState, PlotCounts};
 use log::{Level, debug, error, info};
 use portfu::macros::{get, websocket};
 use portfu::prelude::http::HeaderValue;
 use portfu::prelude::http::header::CONTENT_TYPE;
 use portfu::prelude::tokio_tungstenite::tungstenite::Message;
 use portfu::prelude::*;
-use prometheus::{Registry, TextEncoder};
+use prometheus::{TextEncoder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use uuid::Uuid;
 
-pub fn get_metrics() -> FarmerMetrics {
-    let id = get_uuid().unwrap_or_else(|_| Uuid::new_v4());
-    let metrics_registry = Registry::new_custom(
-        Some(String::from("fast_farmer")),
-        Some(HashMap::from([
-            ("device_id".to_string(), id.to_string()),
-            ("fast_farmer_version".to_string(), _version().to_string()),
-        ])),
-    )
-    .expect("Expected To Create Default Metrics Registry");
-    FarmerMetrics::new(metrics_registry, id)
-}
-
-#[get("/metrics")]
+#[get("/routes")]
 pub async fn metrics<T: Sync + Send + 'static>(
     state: State<Arc<FarmerSharedState<T>>>,
     data: &mut ServiceData,
@@ -60,7 +42,7 @@ pub async fn metrics<T: Sync + Send + 'static>(
                 )
             })
     } else {
-        Err(Error::new(ErrorKind::NotFound, "No metrics were created"))
+        Err(Error::new(ErrorKind::NotFound, "No routes were created"))
     }
 }
 
@@ -122,15 +104,23 @@ pub async fn log_stream(
             format!("{} is not a valid Log Level: {e:?}", level),
         )
     })?;
+    let events = logger.0.recent_events.read().await.iter().cloned().collect::<Vec<_>>();
     let mut receiver = logger.0.subscribe(level)?;
+    for event in events {
+        let _ = socket.send(Message::Text(serde_json::to_string(&event).map_err(|e| {
+            Error::new(ErrorKind::InvalidInput, format!("Failed to send log event: {e:?}"))
+        })?)).await;
+    }
     loop {
         tokio::select! {
             result = receiver.recv() => {
                 match result {
-                    Ok(log_entry) => {
-                        if let Err(e) = socket.send(Message::Text(log_entry)).await {
-                            debug!("Failed to send log entry: {e:?}");
-                            break;
+                    Ok(log_event) => {
+                        if let Ok(json) = serde_json::to_string(&log_event) {
+                            if let Err(e) = socket.send(Message::Text(json)).await {
+                                debug!("Failed to send log event: {e:?}");
+                                break;
+                            }
                         }
                     }
                     Err(e) => {
@@ -171,24 +161,5 @@ pub async fn log_stream(
     match err {
         Some(e) => Err(e),
         None => Ok(()),
-    }
-}
-
-pub fn get_uuid() -> Result<Uuid, Error> {
-    let uuid_path = get_device_id_path();
-    if uuid_path.exists() {
-        Uuid::parse_str(fs::read_to_string(uuid_path)?.as_str())
-            .map_err(|e| Error::new(ErrorKind::InvalidInput, e))
-    } else {
-        info!("Creating UUID: {:?}", uuid_path);
-        if let Some(p) = &uuid_path.parent() {
-            fs::create_dir_all(p)?;
-        }
-        let uuid = Uuid::new_v4();
-        match fs::write(&uuid_path, uuid.to_string().as_bytes()) {
-            Ok(_) => Uuid::parse_str(fs::read_to_string(uuid_path)?.as_str())
-                .map_err(|e| Error::new(ErrorKind::InvalidInput, e)),
-            Err(e) => Err(Error::new(ErrorKind::InvalidInput, e)),
-        }
     }
 }

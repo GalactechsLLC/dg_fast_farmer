@@ -16,7 +16,7 @@ use tui_logger::*;
 use crate::farmer::Farmer;
 use crate::farmer::config::Config;
 use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
-use crate::metrics::metrics;
+use crate::routes::metrics;
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
 use dg_xch_clients::api::pool::DefaultPoolClient;
@@ -53,22 +53,15 @@ pub struct SysInfo {
 pub struct GuiState<T> {
     pub system_info: Arc<Mutex<SysInfo>>,
     pub farmer_state: Arc<FarmerSharedState<T>>,
-    pub full_node_state: Arc<RwLock<FullNodeState>>,
 }
 
 impl<T> GuiState<T> {
     fn new(shared_state: Arc<FarmerSharedState<T>>) -> GuiState<T> {
         GuiState {
             system_info: Default::default(),
-            full_node_state: Default::default(),
             farmer_state: shared_state,
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct FullNodeState {
-    pub blockchain_state: BlockchainState,
 }
 
 pub async fn bootstrap<
@@ -118,7 +111,6 @@ pub async fn bootstrap<
     let fullnode_thread = tokio::spawn(async move {
         update_blockchain(
             fullnode_state.farmer_state.clone(),
-            Some(fullnode_state.clone()),
             fullnode_config,
         )
         .await
@@ -231,12 +223,12 @@ async fn run_gui<B: Backend, T>(
             let farmer_state = gui_state.farmer_state.plot_counts.clone();
             let sys_info = *gui_state.system_info.lock().await;
             let most_recent_sp = *gui_state.farmer_state.most_recent_sp.read().await;
-            let fullnode_state = gui_state.full_node_state.read().await.clone();
+            let fullnode_state = gui_state.farmer_state.fullnode_state.read().await.clone();
             terminal.draw(|f| {
                 ui(
                     f,
                     farmer_state,
-                    Some(fullnode_state),
+                    fullnode_state,
                     most_recent_sp,
                     &sys_info,
                 )
@@ -273,7 +265,7 @@ async fn run_gui<B: Backend, T>(
 fn ui(
     f: &mut Frame,
     plot_counts: Arc<PlotCounts>,
-    fullnode_state: Option<FullNodeState>,
+    fullnode_state: Option<BlockchainState>,
     most_recent_sp: MostRecentSignagePoint,
     sys_info: &SysInfo,
 ) {
@@ -333,16 +325,16 @@ fn ui(
     let mut mempool_size: u64 = 0;
 
     if let Some(full_node) = fullnode_state {
-        if let Some(peak) = full_node.blockchain_state.peak {
+        if let Some(peak) = full_node.peak {
             height = peak.height;
             if let Some(_timestamp) = peak.timestamp {
                 timestamp = _timestamp;
             }
         }
-        sync = full_node.blockchain_state.sync.synced;
-        difficulty = full_node.blockchain_state.difficulty;
-        space = full_node.blockchain_state.space;
-        mempool_size = full_node.blockchain_state.mempool_size;
+        sync = full_node.sync.synced;
+        difficulty = full_node.difficulty;
+        space = full_node.space;
+        mempool_size = full_node.mempool_size;
     }
     let formatted_timestamp: String = if timestamp != 0 {
         let datetime = OffsetDateTime::from_unix_timestamp(timestamp as i64)
