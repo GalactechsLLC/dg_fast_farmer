@@ -2,7 +2,7 @@ use blst::min_pk::SecretKey;
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::config::PoolWalletConfig;
 use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
-use dg_xch_keys::decode_puzzle_hash;
+use dg_xch_keys::{parse_payout_address};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -93,7 +93,7 @@ impl<C: Clone + Serialize> Config<C> {
             && self.fullnode_ws_port != 0
             && self.fullnode_rpc_port != 0
             && !self.farmer_info.is_empty()
-            && decode_puzzle_hash(&self.payout_address).is_ok()
+            && parse_payout_address(&self.payout_address).is_ok()
             && self.pool_info.iter().all(|c| {
                 self.farmer_info
                     .iter()
