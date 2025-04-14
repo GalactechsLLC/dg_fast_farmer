@@ -142,7 +142,7 @@ pub async fn log_stream(
                                 continue;
                             }
                             Message::Close(_close_msg) => {
-                                info!("MPC Stream received Close");
+                                info!("Stream received Close");
                                 break;
                             }
                         }

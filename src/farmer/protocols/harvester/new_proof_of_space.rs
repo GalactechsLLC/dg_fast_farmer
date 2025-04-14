@@ -622,7 +622,7 @@ impl<
                                 info!("New Pool Difficulty: {:?} ", v.current_difficulty);
                                 v.current_difficulty = Some(resp.new_difficulty);
                             }
-                            info!("Current Points: {:?} ", v.current_points);
+                            debug!("Current Points: {:?} ", v.current_points);
                         }
                     }
                     Err(e) => {
