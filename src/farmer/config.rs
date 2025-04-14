@@ -94,13 +94,7 @@ impl<C: Clone + Serialize> Config<C> {
             && self.fullnode_ws_port != 0
             && self.fullnode_rpc_port != 0
             && !self.farmer_info.is_empty()
-            && match parse_payout_address(&self.payout_address){
-                Ok(_) => true,
-                Err(e) => {
-                    error!("Failed to parse payout address: {:?}", e);
-                    false
-                },
-            }
+            && parse_payout_address(&self.payout_address).is_ok()
             && self.pool_info.iter().all(|c| {
                 self.farmer_info
                     .iter()
