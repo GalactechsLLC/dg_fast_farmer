@@ -355,9 +355,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.18"
+version = "1.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "525046617d8376e3db1deffb079e91cef90a89fc3ca5c185bbf8c9ecdd15cd5c"
+checksum = "8e3a13707ac958681c13b39b458c073d0d9bc8a22cb1b2f4c8e55eb72c13f362"
 dependencies = [
  "jobserver",
  "libc",
@@ -410,9 +410,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.35"
+version = "4.5.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8aa86934b44c19c50f87cc2790e19f54f7a67aedb64101c2e1a2e5ecfb73944"
+checksum = "2df961d8c8a0d08aa9945718ccf584145eee3f3aa06cddbeac12933781102e04"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -420,9 +420,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.35"
+version = "4.5.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2414dbb2dd0695280da6ea9261e327479e9d37b0630f6b53ba2a11c60c679fd9"
+checksum = "132dbda40fb6753878316a489d5a1242a8ef2f0d9e47ba01c951ea8aa7d013a5"
 dependencies = [
  "anstream",
  "anstyle",
@@ -669,9 +669,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.8.0"
+version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "575f75dfd25738df5b91b8e43e14d44bda14637a58fae779fd2b064f8bf3e010"
+checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
 name = "der"
@@ -736,7 +736,7 @@ dependencies = [
  "rand 0.8.5",
  "ratatui",
  "regex",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "serde",
  "serde_yaml",
  "sysinfo",
@@ -800,7 +800,7 @@ dependencies = [
  "log",
  "prometheus",
  "reqwest",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "serde",
  "serde_json",
  "tokio",
@@ -836,7 +836,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "rsa",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "rustls-pemfile",
  "secrecy",
  "serde",
@@ -1196,9 +1196,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.8"
+version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5017294ff4bb30944501348f6f8e42e6ad28f42c8bbef7a74029aff064a4e3c2"
+checksum = "75249d144030531f8dee69fe9cea04d3edf809a017ae445e2abdff6629e86633"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -1358,7 +1358,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-util",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.2",
@@ -2057,7 +2057,7 @@ dependencies = [
 [[package]]
 name = "portfu"
 version = "1.2.0"
-source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#71c2097e5fd78d4380180a35fb0711e35cbbcecf"
+source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#17813a4160f3e42166f2145b5307b177d28d225e"
 dependencies = [
  "async-trait",
  "cookie",
@@ -2073,7 +2073,7 @@ dependencies = [
  "portfu_core",
  "portfu_macros",
  "prometheus",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "serde",
  "serde_json",
  "sha2",
@@ -2087,7 +2087,7 @@ dependencies = [
 [[package]]
 name = "portfu_core"
 version = "1.2.0"
-source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#71c2097e5fd78d4380180a35fb0711e35cbbcecf"
+source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#17813a4160f3e42166f2145b5307b177d28d225e"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -2104,7 +2104,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rsa",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "rustls-pemfile",
  "serde",
  "serde_html_form",
@@ -2121,7 +2121,7 @@ dependencies = [
 [[package]]
 name = "portfu_macros"
 version = "1.2.0"
-source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#71c2097e5fd78d4380180a35fb0711e35cbbcecf"
+source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#17813a4160f3e42166f2145b5307b177d28d225e"
 dependencies = [
  "async-trait",
  "http",
@@ -2203,7 +2203,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash 2.1.1",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "socket2",
  "thiserror 2.0.12",
  "tokio",
@@ -2222,7 +2222,7 @@ dependencies = [
  "rand 0.9.0",
  "ring",
  "rustc-hash 2.1.1",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.12",
@@ -2429,7 +2429,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "rustls-pemfile",
  "rustls-pki-types",
  "serde",
@@ -2545,9 +2545,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.25"
+version = "0.23.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "822ee9188ac4ec04a2f0531e55d035fb2de73f18b41a63c70c2712503b6fb13c"
+checksum = "df51b5869f3a441595eac5e8ff14d486ff285f7b8c0df8770e49c3b56351f0f0"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -3115,7 +3115,7 @@ version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e727b36a1a0e8b74c376ac2211e40c2c8af09fb4013c60d910495810f008e9b"
 dependencies = [
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "tokio",
 ]
 
@@ -3143,7 +3143,7 @@ checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
 dependencies = [
  "futures-util",
  "log",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.2",
@@ -3264,7 +3264,7 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.0",
- "rustls 0.23.25",
+ "rustls 0.23.26",
  "rustls-pki-types",
  "sha1",
  "thiserror 2.0.12",

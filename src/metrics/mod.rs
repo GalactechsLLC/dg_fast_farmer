@@ -122,7 +122,12 @@ pub async fn log_stream(
             format!("{} is not a valid Log Level: {e:?}", level),
         )
     })?;
+    let mut msgs = vec![];
+    for msg in logger.0.buffer.read().await.iter() {
+        msgs.push(Message::Text(serde_json::to_string(msg)?));
+    }
     let mut receiver = logger.0.subscribe();
+    socket.send_all(msgs).await?;
     loop {
         tokio::select! {
             result = receiver.recv() => {
