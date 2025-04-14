@@ -2,13 +2,12 @@ use blst::min_pk::SecretKey;
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::config::PoolWalletConfig;
 use dg_xch_core::consensus::constants::CONSENSUS_CONSTANTS_MAP;
-use dg_xch_keys::{parse_payout_address};
+use dg_xch_keys::parse_payout_address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
-use log::error;
 
 const fn default_true() -> bool {
     true
