@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use portfu::wrappers::cors::Cors;
 use tokio::join;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -126,6 +127,7 @@ where
             ServerBuilder::default()
                 .host("0.0.0.0".to_string())
                 .port(metrics_settings.port)
+                .wrap(Arc::new(Cors::allow_all()))
                 .shared_state::<FarmerSharedState<T>>(shared_state)
                 .shared_state::<DruidGardenLogger>(logger)
                 .register(metrics::<T>::default())
