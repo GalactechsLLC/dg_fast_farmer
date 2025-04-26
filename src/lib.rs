@@ -190,7 +190,7 @@ where
             launcher_id,
         } => {
             let _logger = init_logger();
-            generate_config_from_mnemonic(
+            generate_config_from_mnemonic::<C>(
                 GenerateConfig {
                     output_path: Some(config_path),
                     mnemonic_file,

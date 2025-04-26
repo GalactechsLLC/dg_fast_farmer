@@ -34,6 +34,8 @@ use dialoguer::Confirm;
 use hex::encode;
 use log::{info, warn};
 use portfu::prelude::ServerBuilder;
+use portfu::wrappers::cors::Cors;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -126,6 +128,7 @@ where
             ServerBuilder::default()
                 .host("0.0.0.0".to_string())
                 .port(metrics_settings.port)
+                .wrap(Arc::new(Cors::allow_all()))
                 .shared_state::<FarmerSharedState<T>>(shared_state)
                 .shared_state::<DruidGardenLogger>(logger)
                 .register(metrics::<T>::default())
@@ -165,10 +168,10 @@ pub struct GenerateConfig {
     pub additional_headers: Option<HashMap<String, String>>,
 }
 
-pub async fn generate_config_from_mnemonic(
+pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
     gen_settings: GenerateConfig,
     use_prompts: bool,
-) -> Result<Config, Error> {
+) -> Result<Config<C>, Error> {
     if let Some(op) = &gen_settings.output_path {
         if use_prompts
             && op.exists()
