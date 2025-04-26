@@ -1,4 +1,4 @@
-use dg_logger::{DruidGardenLogger};
+use dg_logger::DruidGardenLogger;
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
 use dg_xch_core::protocols::farmer::{FarmerSharedState, PlotCounts};
 use log::{Level, debug, error, info};
@@ -7,7 +7,7 @@ use portfu::prelude::http::HeaderValue;
 use portfu::prelude::http::header::CONTENT_TYPE;
 use portfu::prelude::tokio_tungstenite::tungstenite::Message;
 use portfu::prelude::*;
-use prometheus::{TextEncoder};
+use prometheus::TextEncoder;
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
