@@ -8,7 +8,7 @@ use crate::farmer::Farmer;
 use crate::farmer::config::{Config, DruidGardenHarvesterConfig, FarmingInfo};
 use crate::gui;
 use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
-use crate::metrics::{farmer_state, log_stream, metrics};
+use crate::routes::{farmer_state, log_stream, metrics};
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
 use dg_logger::DruidGardenLogger;
@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use portfu::wrappers::cors::Cors;
 use tokio::join;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -116,7 +117,7 @@ where
     let fn_config = config.clone();
     let fullnode_thread =
         tokio::spawn(
-            async move { update_blockchain(fn_shared_state.clone(), None, fn_config).await },
+            async move { update_blockchain(fn_shared_state.clone(), fn_config).await },
         );
     let metrics_settings = config.read().await.metrics.clone().unwrap_or_default();
     info!(

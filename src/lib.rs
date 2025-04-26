@@ -2,19 +2,18 @@ use crate::cli::commands::{
     GenerateConfig, cli_mode, generate_config_from_mnemonic, join_pool, tui_mode, update,
     update_pool_info,
 };
-use crate::cli::utils::{check_config, get_config_path, get_ssl_root_path, init_logger};
+use crate::cli::utils::{check_config, get_config_path, get_device_id_path, get_ssl_root_path, init_logger};
 use crate::cli::{Action, Cli};
 use crate::farmer::config::{Config, load_keys};
 use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
 use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
 use crate::harvesters::druid_garden::DruidGardenHarvester;
 use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
-use crate::metrics::get_metrics;
 use blst::min_pk::SecretKey;
 use clap::Parser;
 use dg_xch_clients::api::pool::{DefaultPoolClient, create_pool_login_url};
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
-use dg_xch_core::protocols::farmer::FarmerSharedState;
+use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState};
 use dg_xch_core::ssl::create_all_ssl;
 use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
 use dg_xch_serialize::ChiaProtocolVersion;
@@ -22,14 +21,17 @@ use once_cell::sync::Lazy;
 use portfu::prelude::http::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
+use std::{env, fs};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use log::info;
+use prometheus::Registry;
 use tokio::fs::create_dir_all;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 const PROTOCOL_VERSION: ChiaProtocolVersion = ChiaProtocolVersion::Chia0_0_36;
 
@@ -71,7 +73,7 @@ pub mod cli;
 pub mod farmer;
 pub mod gui;
 pub mod harvesters;
-pub mod metrics;
+pub mod routes;
 pub mod tasks;
 
 pub enum RunMode {
@@ -303,6 +305,38 @@ where
             let link = create_pool_login_url(&pool_url, &[(auth_key, launcher_id)]).await?;
             println!("{link}");
             Ok(())
+        }
+    }
+}
+
+pub fn get_metrics() -> FarmerMetrics {
+    let id = get_uuid().unwrap_or_else(|_| Uuid::new_v4());
+    let metrics_registry = Registry::new_custom(
+        Some(String::from("fast_farmer")),
+        Some(HashMap::from([
+            ("device_id".to_string(), id.to_string()),
+            ("fast_farmer_version".to_string(), _version().to_string()),
+        ])),
+    )
+        .expect("Expected To Create Default Metrics Registry");
+    FarmerMetrics::new(metrics_registry, id)
+}
+
+pub fn get_uuid() -> Result<Uuid, Error> {
+    let uuid_path = get_device_id_path();
+    if uuid_path.exists() {
+        Uuid::parse_str(fs::read_to_string(uuid_path)?.as_str())
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, e))
+    } else {
+        info!("Creating UUID: {:?}", uuid_path);
+        if let Some(p) = &uuid_path.parent() {
+            fs::create_dir_all(p)?;
+        }
+        let uuid = Uuid::new_v4();
+        match fs::write(&uuid_path, uuid.to_string().as_bytes()) {
+            Ok(_) => Uuid::parse_str(fs::read_to_string(uuid_path)?.as_str())
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, e)),
+            Err(e) => Err(Error::new(ErrorKind::InvalidInput, e)),
         }
     }
 }
