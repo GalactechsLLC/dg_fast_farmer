@@ -109,11 +109,7 @@ pub async fn bootstrap<
     let fullnode_state = gui_state.clone();
     let fullnode_config = config.clone();
     let fullnode_thread = tokio::spawn(async move {
-        update_blockchain(
-            fullnode_state.farmer_state.clone(),
-            fullnode_config,
-        )
-        .await
+        update_blockchain(fullnode_state.farmer_state.clone(), fullnode_config).await
     });
     let sys_info_gui_state = gui_state.clone();
     let sys_info_thread = tokio::spawn(async move {
@@ -224,15 +220,7 @@ async fn run_gui<B: Backend, T>(
             let sys_info = *gui_state.system_info.lock().await;
             let most_recent_sp = *gui_state.farmer_state.most_recent_sp.read().await;
             let fullnode_state = gui_state.farmer_state.fullnode_state.read().await.clone();
-            terminal.draw(|f| {
-                ui(
-                    f,
-                    farmer_state,
-                    fullnode_state,
-                    most_recent_sp,
-                    &sys_info,
-                )
-            })?;
+            terminal.draw(|f| ui(f, farmer_state, fullnode_state, most_recent_sp, &sys_info))?;
         }
         if event::poll(Duration::from_millis(25))? {
             if let Event::Key(event) = event::read()? {

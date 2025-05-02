@@ -34,6 +34,7 @@ use dialoguer::Confirm;
 use hex::encode;
 use log::{info, warn};
 use portfu::prelude::ServerBuilder;
+use portfu::wrappers::cors::Cors;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -113,9 +114,7 @@ where
     let fn_shared_state = shared_state.clone();
     let fn_config = config.clone();
     let fullnode_thread =
-        tokio::spawn(
-            async move { update_blockchain(fn_shared_state.clone(), fn_config).await },
-        );
+        tokio::spawn(async move { update_blockchain(fn_shared_state.clone(), fn_config).await });
     let metrics_settings = config.read().await.metrics.clone().unwrap_or_default();
     info!(
         "Metrics: {} on port: {}",
@@ -126,6 +125,7 @@ where
             ServerBuilder::default()
                 .host("0.0.0.0".to_string())
                 .port(metrics_settings.port)
+                .wrap(Arc::new(Cors::allow_all()))
                 .shared_state::<FarmerSharedState<T>>(shared_state)
                 .shared_state::<DruidGardenLogger>(logger)
                 .register(metrics::<T>::default())

@@ -2,7 +2,9 @@ use crate::cli::commands::{
     GenerateConfig, cli_mode, generate_config_from_mnemonic, join_pool, tui_mode, update,
     update_pool_info,
 };
-use crate::cli::utils::{check_config, get_config_path, get_device_id_path, get_ssl_root_path, init_logger};
+use crate::cli::utils::{
+    check_config, get_config_path, get_device_id_path, get_ssl_root_path, init_logger,
+};
 use crate::cli::{Action, Cli};
 use crate::farmer::config::{Config, load_keys};
 use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
@@ -17,18 +19,18 @@ use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState};
 use dg_xch_core::ssl::create_all_ssl;
 use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
 use dg_xch_serialize::ChiaProtocolVersion;
+use log::info;
 use once_cell::sync::Lazy;
 use portfu::prelude::http::header::USER_AGENT;
+use prometheus::Registry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::{env, fs};
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use log::info;
-use prometheus::Registry;
+use std::{env, fs};
 use tokio::fs::create_dir_all;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -318,7 +320,7 @@ pub fn get_metrics() -> FarmerMetrics {
             ("fast_farmer_version".to_string(), _version().to_string()),
         ])),
     )
-        .expect("Expected To Create Default Metrics Registry");
+    .expect("Expected To Create Default Metrics Registry");
     FarmerMetrics::new(metrics_registry, id)
 }
 
