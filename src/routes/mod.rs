@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-#[get("/routes")]
+#[get("/metrics")]
 pub async fn metrics<T: Sync + Send + 'static>(
     state: State<Arc<FarmerSharedState<T>>>,
     data: &mut ServiceData,
@@ -62,6 +62,29 @@ impl From<&PlotCounts> for SerialPlotCounts {
             compresses_plot_count: counts.compresses_plot_count.load(Ordering::Relaxed),
             invalid_plot_count: counts.invalid_plot_count.load(Ordering::Relaxed),
             total_plot_space: counts.total_plot_space.load(Ordering::Relaxed),
+        }
+    }
+}
+
+use crate::harvesters::druid_garden::PlotCounts as HarvesterPlotCounts;
+#[derive(Serialize, Deserialize)]
+pub struct SerialHarvesterPlotCounts {
+    pub og_passed: u64,
+    pub og_total: u64,
+    pub pool_total: u64,
+    pub pool_passed: u64,
+    pub compressed_passed: u64,
+    pub compressed_total: u64,
+}
+impl From<&HarvesterPlotCounts> for SerialHarvesterPlotCounts {
+    fn from(counts: &HarvesterPlotCounts) -> Self {
+        Self {
+            og_passed: counts.og_passed.load(Ordering::Relaxed),
+            og_total: counts.og_total.load(Ordering::Relaxed),
+            pool_total: counts.pool_total.load(Ordering::Relaxed),
+            pool_passed: counts.pool_passed.load(Ordering::Relaxed),
+            compressed_passed: counts.compressed_passed.load(Ordering::Relaxed),
+            compressed_total: counts.compressed_total.load(Ordering::Relaxed),
         }
     }
 }

@@ -3,6 +3,7 @@ use crate::cli::utils::load_client_id;
 use crate::farmer::config::Config;
 use crate::farmer::{PathInfo, PlotInfo};
 use crate::harvesters::{FarmingKeys, Harvester, ProofHandler, SignatureHandler, count_plots};
+use crate::routes::SerialHarvesterPlotCounts;
 use async_trait::async_trait;
 use blst::min_pk::{PublicKey, SecretKey};
 use dg_xch_core::blockchain::proof_of_space::{
@@ -29,6 +30,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{StreamExt, TryStreamExt};
 use hex::encode;
 use log::{debug, error, info, warn};
+use portfu::pfcore::cache::CircularCache;
 use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind};
@@ -60,6 +62,7 @@ pub struct DruidGardenHarvester<T: Send + Sync + 'static> {
     pub uuid: Bytes32,
     pub client_id: Bytes32,
     pub shared_state: Arc<FarmerSharedState<T>>,
+    pub recent_plot_stats: Arc<RwLock<CircularCache<Bytes32, SerialHarvesterPlotCounts, 100>>>,
 }
 #[async_trait]
 impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
@@ -405,6 +408,10 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
             .await
             .as_ref()
             .inspect(|m| m.last_passed_filter.set(total_passed));
+        self.recent_plot_stats
+            .write()
+            .await
+            .insert(harvester_point.challenge_hash, plot_counts.as_ref().into());
         Ok(())
     }
 
@@ -555,6 +562,7 @@ impl<T: Send + Sync + 'static> DruidGardenHarvester<T> {
             client_id,
             uuid: Bytes32::from(random::<[u8; 32]>()),
             shared_state,
+            recent_plot_stats: Arc::new(Default::default()),
         })
     }
 }

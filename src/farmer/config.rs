@@ -100,6 +100,16 @@ impl<C: Clone + Serialize> Config<C> {
                     .any(|f| f.launcher_id == Some(c.launcher_id))
             })
     }
+    pub fn merge(&mut self, other: Self) {
+        self.farmer_info.extend(other.farmer_info);
+        self.pool_info.extend(other.pool_info);
+        if self.payout_address.is_empty()
+            && !other.payout_address.is_empty()
+            && parse_payout_address(&other.payout_address).is_ok()
+        {
+            self.payout_address = other.payout_address;
+        }
+    }
 }
 
 impl<C: Clone> Default for Config<C> {
