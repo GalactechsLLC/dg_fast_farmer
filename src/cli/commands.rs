@@ -8,7 +8,7 @@ use crate::farmer::Farmer;
 use crate::farmer::config::{Config, DruidGardenHarvesterConfig, FarmingInfo};
 use crate::gui;
 use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
-use crate::routes::{farmer_state, log_stream, metrics};
+use crate::routes::{farmer_state, farmer_stats, log_stream, metrics};
 use crate::tasks::blockchain_state_updater::update_blockchain;
 use crate::tasks::pool_state_updater::pool_updater;
 use dg_logger::DruidGardenLogger;
@@ -131,6 +131,7 @@ where
                 .shared_state::<DruidGardenLogger>(logger)
                 .register(metrics::<T>::default())
                 .register(farmer_state::<T>::default())
+                .register(farmer_stats::<T>::default())
                 .register(log_stream {
                     peers: Default::default(),
                 })

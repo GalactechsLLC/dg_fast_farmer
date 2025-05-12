@@ -1,6 +1,7 @@
 use dg_logger::DruidGardenLogger;
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
-use dg_xch_core::protocols::farmer::{FarmerSharedState, PlotCounts};
+use dg_xch_core::blockchain::sized_bytes::Bytes32;
+use dg_xch_core::protocols::farmer::{FarmerSharedState, FarmerStats, PlotCounts};
 use log::{Level, debug, error, info};
 use portfu::macros::{get, websocket};
 use portfu::prelude::http::HeaderValue;
@@ -9,6 +10,7 @@ use portfu::prelude::tokio_tungstenite::tungstenite::Message;
 use portfu::prelude::*;
 use prometheus::TextEncoder;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -111,6 +113,13 @@ pub async fn farmer_state<T: Sync + Send + 'static>(
             .as_ref()
             .map(|v| v.clone()),
     })
+}
+
+#[get("/stats", output = "json", eoutput = "bytes")]
+pub async fn farmer_stats<T: Sync + Send + 'static>(
+    state: State<FarmerSharedState<T>>,
+) -> Result<HashMap<(Bytes32, Bytes32), FarmerStats>, Error> {
+    Ok(state.0.recent_stats.read().await.clone())
 }
 
 #[websocket("/log_stream/{level}")]
