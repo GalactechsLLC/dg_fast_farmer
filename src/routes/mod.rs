@@ -138,7 +138,7 @@ pub async fn log_stream(
     })?;
     let mut msgs = vec![];
     for msg in logger.0.buffer.read().await.iter() {
-        msgs.push(Message::Text(serde_json::to_string(msg)?));
+        msgs.push(Message::Text(serde_json::to_string(msg)?.into()));
     }
     let mut receiver = logger.0.subscribe();
     socket.send_all(msgs).await?;
@@ -149,7 +149,7 @@ pub async fn log_stream(
                     Ok(log_entry) => {
                         if log_entry.level <= level {
                             let as_json = serde_json::to_string(&log_entry)?;
-                            if let Err(e) = socket.send(Message::Text(as_json)).await {
+                            if let Err(e) = socket.send(Message::Text(as_json.into())).await {
                                 debug!("Failed to send log entry: {e:?}");
                                 break;
                             }
