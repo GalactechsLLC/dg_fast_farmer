@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "dg_logger"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "colored",
  "log",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_cli"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "bip39",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_clients"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "blst",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_core"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "bls12_381",
@@ -832,6 +832,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "parking_lot",
+ "portfu",
  "prometheus",
  "rand 0.8.5",
  "regex",
@@ -850,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_keys"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "bech32",
  "bip39",
@@ -864,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_macros"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -873,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_pos"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "blake3",
@@ -896,7 +897,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_puzzles"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "blst",
  "dg_xch_core",
@@ -911,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_serialize"
-version = "2.0.3"
+version = "2.1.1"
 dependencies = [
  "log",
  "serde",
@@ -2040,8 +2041,9 @@ dependencies = [
 
 [[package]]
 name = "portfu"
-version = "1.2.0"
-source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#73adade3d64850cdc17e5515b894d44ae6695d4a"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02b5b9e5bfa33ef8f11d2508629cc6eb1da8fd3e2250b2fb37a9a8f2dcecbbf0"
 dependencies = [
  "async-trait",
  "cookie",
@@ -2070,8 +2072,9 @@ dependencies = [
 
 [[package]]
 name = "portfu_core"
-version = "1.2.0"
-source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#73adade3d64850cdc17e5515b894d44ae6695d4a"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4014a6f58450a016dcf1fee666500a0141becc9a553764be57499ed7283f162a"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -2105,8 +2108,9 @@ dependencies = [
 
 [[package]]
 name = "portfu_macros"
-version = "1.2.0"
-source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#73adade3d64850cdc17e5515b894d44ae6695d4a"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "823543a13ad145e0178dbd9cb36079ca4f0f05df7ea20eb4b45b05a14f9f1d61"
 dependencies = [
  "async-trait",
  "http",

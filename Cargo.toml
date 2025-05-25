@@ -24,20 +24,20 @@ bytefmt = "0.1.7"
 clap = { version = "4.5.30", features = ["derive"] }
 crossterm = "0.28.1"
 dialoguer = "0.11.0"
-dg_xch_cli = { path="./dg_xch_utils/cli", version="2.0.3" }
-dg_xch_clients = { path="./dg_xch_utils/clients", version="2.0.3", features = ["metrics"] }
-dg_xch_core = { path="./dg_xch_utils/core", version = "2.0.3", default-features = false, features = ["metrics"] }
-dg_xch_keys = { path="./dg_xch_utils/keys", version="2.0.3" }
-dg_logger = { path="./dg_xch_utils/logging", version="2.0.3" }
-dg_xch_pos = { path="./dg_xch_utils/proof_of_space", version="2.0.3" }
-dg_xch_puzzles = { path="./dg_xch_utils/puzzles", version="2.0.3" }
-dg_xch_serialize = { path="./dg_xch_utils/serialize", version="2.0.3" }
+dg_xch_cli = { path="./dg_xch_utils/cli", version="2.1.1" }
+dg_xch_clients = { path="./dg_xch_utils/clients", version="2.1.1", features = ["metrics"] }
+dg_xch_core = { path="./dg_xch_utils/core", version = "2.1.1", default-features = false, features = ["metrics"] }
+dg_xch_keys = { path="./dg_xch_utils/keys", version="2.1.1" }
+dg_logger = { path="./dg_xch_utils/logging", version="2.1.1" }
+dg_xch_pos = { path="./dg_xch_utils/proof_of_space", version="2.1.1" }
+dg_xch_puzzles = { path="./dg_xch_utils/puzzles", version="2.1.1" }
+dg_xch_serialize = { path="./dg_xch_utils/serialize", version="2.1.1" }
 futures-util = "0.3.31"
 hex = "0.4.3"
 home = "0.5.11"
 log = "0.4.26"
 once_cell = "1.20.3"
-portfu = { git = "https://github.com/GalactechsLLC/portfu.git", branch = "pf_admin_updates"}
+portfu = { version = "1.3.0" }
 prometheus = {version="0.13.4", features=["protobuf"]}
 rand = "0.8.5"
 ratatui = "0.29.0"
