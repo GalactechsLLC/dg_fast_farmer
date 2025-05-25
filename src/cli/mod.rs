@@ -1,6 +1,6 @@
-pub(crate) mod commands;
+pub mod commands;
 mod prompts;
-pub(crate) mod utils;
+pub mod utils;
 
 use clap::{Parser, Subcommand};
 use std::io::Error;
@@ -64,6 +64,10 @@ pub enum Action {
     UpdatePoolInfo {
         #[arg(short = 'l', long)]
         launcher_id: Option<String>,
+    },
+    GetLoginLink {
+        #[arg(short = 'l', long)]
+        launcher_id: String,
     },
     UpdatePayoutAddress {
         #[arg(short = 'a', long)]

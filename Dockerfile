@@ -16,7 +16,7 @@ RUN cargo build --release && mv /target/release/* /build
 FROM debian:bullseye-slim AS dg_fast_farmer
 LABEL authors="James Hoerr" \
     name="dg_fast_farmer" \
-    version="1.0.1" \
+    version="2.0.0" \
     description="A lite farmer for the Chia Blockchain." \
     license="Apache-2.0" \
     homepage="https://github.com/GalactechsLLC/dg_fast_farmer" \

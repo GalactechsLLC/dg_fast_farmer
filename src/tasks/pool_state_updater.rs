@@ -1,5 +1,4 @@
 use crate::farmer::config::Config;
-use crate::farmer::ExtendedFarmerSharedState;
 use crate::{HEADERS, PROTOCOL_VERSION};
 use blst::min_pk::SecretKey;
 use dg_xch_clients::api::pool::{DefaultPoolClient, PoolClient};
@@ -8,17 +7,21 @@ use dg_xch_core::clvm::bls_bindings::{sign, verify_signature};
 use dg_xch_core::config::PoolWalletConfig;
 use dg_xch_core::protocols::farmer::{FarmerPoolState, FarmerSharedState};
 use dg_xch_core::protocols::pool::{
-    get_current_authentication_token, AuthenticationPayload, GetFarmerRequest, GetFarmerResponse,
-    PoolError, PoolErrorCode, PostFarmerPayload, PostFarmerRequest, PostFarmerResponse,
-    PutFarmerPayload, PutFarmerRequest, PutFarmerResponse,
+    AuthenticationPayload, GetFarmerRequest, GetFarmerResponse, PoolError, PoolErrorCode,
+    PostFarmerPayload, PostFarmerRequest, PostFarmerResponse, PutFarmerPayload, PutFarmerRequest,
+    PutFarmerResponse, get_current_authentication_token,
 };
+use dg_xch_core::traits::SizedBytes;
+use dg_xch_core::utils::hash_256;
 use dg_xch_keys::{encode_puzzle_hash, parse_payout_address};
-use dg_xch_serialize::{hash_256, ChiaSerialize};
+use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::collections::hash_map::Entry;
+use std::io::Error;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
 
@@ -26,36 +29,44 @@ const UPDATE_POOL_INFO_INTERVAL: u64 = 600;
 const UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL: u64 = 120;
 const UPDATE_POOL_FARMER_INFO_INTERVAL: u64 = 300;
 
-pub async fn pool_updater(shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>) {
+pub async fn pool_updater<T, C: Clone>(
+    shared_state: Arc<FarmerSharedState<T>>,
+    config: Arc<RwLock<Config<C>>>,
+) {
     let mut last_update = Instant::now();
     let mut first = true;
     let pool_client = Arc::new(DefaultPoolClient::new());
     loop {
-        if !shared_state.data.run.load(Ordering::Relaxed) {
+        if !shared_state.signal.load(Ordering::Relaxed) {
             break;
         } else if first
-            || shared_state.data.force_pool_update.load(Ordering::Relaxed)
+            || shared_state.force_pool_update.load(Ordering::Relaxed)
             || Instant::now().duration_since(last_update).as_secs() >= 60
         {
-            info!("Updating Pool State");
-            update_pool_state(
-                shared_state.owner_public_keys_to_auth_secret_keys.as_ref(),
-                shared_state.owner_secret_keys.as_ref(),
-                shared_state.pool_states.clone(),
+            debug!("Updating Pool State");
+            if let Err(e) = update_pool_state(
                 pool_client.clone(),
-                shared_state.data.config.clone(),
+                &*config.read().await,
+                shared_state.clone(),
             )
-            .await;
-            first = false;
-            last_update = Instant::now();
-            shared_state.data.gui_stats.write().await.last_pool_update = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("System Time should be Greater than Epoch")
-                .as_secs();
-            shared_state
-                .data
-                .force_pool_update
-                .store(false, Ordering::Relaxed);
+            .await
+            {
+                error!("Error updating Pool State: {}", e);
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            } else {
+                first = false;
+                last_update = Instant::now();
+                shared_state.last_pool_update.store(
+                    SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .expect("System Time should be Greater than Epoch")
+                        .as_secs(),
+                    Ordering::Relaxed,
+                );
+                shared_state
+                    .force_pool_update
+                    .store(false, Ordering::Relaxed);
+            }
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
@@ -67,6 +78,8 @@ pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
     authentication_token_timeout: u8,
     authentication_sk: &SecretKey,
     client: Arc<T>,
+    mut headers: HashMap<String, String>,
+    chia_version: impl for<'a> AsyncFn() -> Option<String>,
 ) -> Result<GetFarmerResponse, PoolError> {
     let authentication_token = get_current_authentication_token(authentication_token_timeout);
     let msg = AuthenticationPayload {
@@ -85,6 +98,10 @@ pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
             error_message: "Local Failed to Validate Signature".to_string(),
         });
     }
+    if let Some(v) = chia_version().await {
+        headers.insert(String::from("X-chia-version"), v);
+    }
+    headers.extend(HEADERS.clone());
     client
         .get_farmer(
             &pool_config.pool_url,
@@ -93,7 +110,7 @@ pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
                 authentication_token,
                 signature: signature.to_bytes().into(),
             },
-            &Some(HEADERS.clone()),
+            &Some(headers),
         )
         .await
 }
@@ -103,7 +120,7 @@ async fn do_auth(
     owner_sk: &SecretKey,
     auth_keys: &HashMap<Bytes48, SecretKey>,
 ) -> Result<Bytes48, PoolError> {
-    if owner_sk.sk_to_pk().to_bytes() != *pool_config.owner_public_key.to_sized_bytes() {
+    if owner_sk.sk_to_pk().to_bytes() != pool_config.owner_public_key.bytes() {
         Err(PoolError {
             error_code: PoolErrorCode::ServerException as u8,
             error_message: "Owner Keys Mismatch".to_string(),
@@ -118,6 +135,7 @@ async fn do_auth(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
     pool_config: &PoolWalletConfig,
     payout_instructions: &str,
@@ -126,6 +144,8 @@ pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
     auth_keys: &HashMap<Bytes48, SecretKey>,
     suggested_difficulty: Option<u64>,
     client: Arc<T>,
+    mut headers: HashMap<String, String>,
+    chia_version: impl for<'a> AsyncFn() -> Option<String>,
 ) -> Result<PostFarmerResponse, PoolError> {
     let payload = PostFarmerPayload {
         launcher_id: pool_config.launcher_id,
@@ -149,6 +169,10 @@ pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
             error_message: "Local Failed to Validate Signature".to_string(),
         });
     }
+    if let Some(v) = chia_version().await {
+        headers.insert(String::from("X-chia-version"), v);
+    }
+    headers.extend(HEADERS.clone());
     client
         .post_farmer(
             &pool_config.pool_url,
@@ -156,11 +180,12 @@ pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
                 payload,
                 signature: signature.to_bytes().into(),
             },
-            &Some(HEADERS.clone()),
+            &Some(headers),
         )
         .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
     pool_config: &PoolWalletConfig,
     payout_instructions: &str,
@@ -169,6 +194,8 @@ pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
     auth_keys: &HashMap<Bytes48, SecretKey>,
     suggested_difficulty: Option<u64>,
     client: Arc<T>,
+    mut headers: HashMap<String, String>,
+    chia_version: impl for<'a> AsyncFn() -> Option<String>,
 ) -> Result<PutFarmerResponse, PoolError> {
     let authentication_public_key = do_auth(pool_config, owner_sk, auth_keys).await?;
     let payload = PutFarmerPayload {
@@ -191,23 +218,38 @@ pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
         payload,
         signature: signature.to_bytes().into(),
     };
+    if let Some(v) = chia_version().await {
+        headers.insert(String::from("X-chia-version"), v);
+    }
+    headers.extend(HEADERS.clone());
     client
-        .put_farmer(&pool_config.pool_url, request, &Some(HEADERS.clone()))
+        .put_farmer(&pool_config.pool_url, request, &Some(headers))
         .await
 }
 
-pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
+pub async fn update_pool_farmer_info<T, P: PoolClient + Sized + Sync + Send>(
     pool_states: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
     pool_config: &PoolWalletConfig,
     authentication_token_timeout: u8,
     authentication_sk: &SecretKey,
-    client: Arc<T>,
+    client: Arc<P>,
+    headers: HashMap<String, String>,
+    shared_state: Arc<FarmerSharedState<T>>,
 ) -> Result<GetFarmerResponse, PoolError> {
     let response = get_farmer(
         pool_config,
         authentication_token_timeout,
         authentication_sk,
         client,
+        headers,
+        async move || {
+            shared_state
+                .upstream_handshake
+                .read()
+                .await
+                .as_ref()
+                .map(|v| v.software_version.clone())
+        },
     )
     .await?;
     pool_states
@@ -259,27 +301,29 @@ pub async fn update_pool_farmer_info<T: PoolClient + Sized + Sync + Send>(
     Ok(response)
 }
 
-pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
-    auth_keys: &HashMap<Bytes48, SecretKey>,
-    owner_keys: &HashMap<Bytes48, SecretKey>,
-    pool_states: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
-    client: Arc<T>,
-    config: Arc<Config>,
-) {
+pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Sync + Send>(
+    client: Arc<P>,
+    config: &Config<C>,
+    shared_state: Arc<FarmerSharedState<T>>,
+) -> Result<(), Error> {
+    let auth_keys = shared_state.owner_public_keys_to_auth_secret_keys.as_ref();
+    let owner_keys = shared_state.owner_secret_keys.as_ref();
+    let pool_states = shared_state.pool_states.clone();
+    let headers = shared_state.additional_headers.as_ref().clone();
     for pool_config in &config.pool_info {
         if let (Some(owner_secret_key), Some(auth_secret_key)) = (
             owner_keys.get(&pool_config.owner_public_key),
             auth_keys.get(&pool_config.owner_public_key),
         ) {
-            info!(
-                "Adding Pool State for {}",
-                pool_config.p2_singleton_puzzle_hash
-            );
             if let Entry::Vacant(s) = pool_states
                 .write()
                 .await
                 .entry(pool_config.p2_singleton_puzzle_hash)
             {
+                info!(
+                    "Adding Pool State for {}",
+                    pool_config.p2_singleton_puzzle_hash
+                );
                 s.insert(FarmerPoolState {
                     points_found_since_start: 0,
                     points_found_24h: vec![],
@@ -326,11 +370,11 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     )
                 })
                 .next_pool_info_update;
-            info!(
-                "Updating Pool Info {}",
-                pool_config.p2_singleton_puzzle_hash
-            );
             if Instant::now() >= next_pool_info_update {
+                info!(
+                    "Updating Pool Info {}",
+                    pool_config.p2_singleton_puzzle_hash
+                );
                 //Makes a GET request to the pool to get the updated information
                 match client.get_pool_info(&pool_config.pool_url).await {
                     Ok(pool_info) => {
@@ -415,11 +459,11 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     )
                 })
                 .next_farmer_update;
-            info!(
-                "Updating Pool Info {}",
-                pool_config.p2_singleton_puzzle_hash
-            );
             if Instant::now() >= next_farmer_update {
+                info!(
+                    "Updating Pool Info {}",
+                    pool_config.p2_singleton_puzzle_hash
+                );
                 pool_states
                     .write()
                     .await
@@ -451,6 +495,8 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         authentication_token_timeout,
                         auth_secret_key,
                         client.clone(),
+                        headers.clone(),
+                        shared_state.clone(),
                     )
                     .await
                     {
@@ -458,6 +504,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         Err(e) => {
                             if e.error_code == PoolErrorCode::FarmerNotKnown as u8 {
                                 warn!("Farmer Pool Not Known");
+                                let post_shared_state = shared_state.clone();
                                 match post_farmer(
                                     pool_config,
                                     &config.payout_address,
@@ -466,6 +513,15 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     auth_keys,
                                     pool_config.difficulty,
                                     client.clone(),
+                                    headers.clone(),
+                                    async move || {
+                                        post_shared_state
+                                            .upstream_handshake
+                                            .read()
+                                            .await
+                                            .as_ref()
+                                            .map(|v| v.software_version.clone())
+                                    },
                                 )
                                 .await
                                 {
@@ -485,6 +541,8 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     authentication_token_timeout,
                                     auth_secret_key,
                                     client.clone(),
+                                    headers.clone(),
+                                    shared_state.clone(),
                                 )
                                 .await
                                 {
@@ -499,6 +557,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                 }
                             } else if e.error_code == PoolErrorCode::InvalidSignature as u8 {
                                 warn!("Invalid Signature Detected, Updating Farmer Auth Key");
+                                let put_shared_state = shared_state.clone();
                                 match put_farmer(
                                     pool_config,
                                     &config.payout_address,
@@ -507,6 +566,15 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     auth_keys,
                                     pool_config.difficulty,
                                     client.clone(),
+                                    headers.clone(),
+                                    async move || {
+                                        put_shared_state
+                                            .upstream_handshake
+                                            .read()
+                                            .await
+                                            .as_ref()
+                                            .map(|v| v.software_version.clone())
+                                    },
                                 )
                                 .await
                                 {
@@ -518,6 +586,8 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                             authentication_token_timeout,
                                             auth_secret_key,
                                             client.clone(),
+                                            headers.clone(),
+                                            shared_state.clone(),
                                         )
                                         .await
                                         .ok()
@@ -562,13 +632,13 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         })
                         .current_difficulty;
                     let difficulty_update_required = pool_config.difficulty.unwrap_or_default() > 0
-                        && current_difficulty < pool_config.difficulty;
+                        && current_difficulty != pool_config.difficulty;
                     debug!(
                         "Current Pool Payout Address: {}",
                         encode_puzzle_hash(
-                            &Bytes32::from(
-                                parse_payout_address(&old_instructions).unwrap_or_default()
-                            ),
+                            &Bytes32::from_str(
+                                &parse_payout_address(&old_instructions).unwrap_or_default()
+                            )?,
                             "xch"
                         )
                         .unwrap_or_default()
@@ -576,9 +646,9 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                     debug!(
                         "Desired Pool Payout Address: {}",
                         encode_puzzle_hash(
-                            &Bytes32::from(
-                                parse_payout_address(&config.payout_address).unwrap_or_default()
-                            ),
+                            &Bytes32::from_str(
+                                &parse_payout_address(&config.payout_address).unwrap_or_default()
+                            )?,
                             "xch"
                         )
                         .unwrap_or_default()
@@ -608,6 +678,7 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                 continue;
                             }
                             Some(sk) => {
+                                let put_shared_state = shared_state.clone();
                                 match put_farmer(
                                     pool_config,
                                     &config.payout_address,
@@ -616,18 +687,40 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                                     auth_keys,
                                     pool_config.difficulty,
                                     client.clone(),
+                                    headers.clone(),
+                                    async move || {
+                                        put_shared_state
+                                            .upstream_handshake
+                                            .read()
+                                            .await
+                                            .as_ref()
+                                            .map(|v| v.software_version.clone())
+                                    },
                                 )
                                 .await
                                 {
                                     Ok(res) => {
-                                        if res.suggested_difficulty.is_some() {
-                                            pool_states
-                                                .write()
-                                                .await
-                                                .get_mut(&pool_config.p2_singleton_puzzle_hash)
-                                                .unwrap_or_else(|| panic!("Item Added to Map Above, Expected {} to exist",
-                                                    &pool_config.p2_singleton_puzzle_hash))
-                                                .current_difficulty = pool_config.difficulty
+                                        if payout_instructions_update_required {
+                                            if let Some(false) = res.payout_instructions {
+                                                error!("Pool Rejected Updating Payout Address")
+                                            }
+                                        }
+                                        if difficulty_update_required {
+                                            if let Some(true) = res.suggested_difficulty {
+                                                info!(
+                                                    "Updated Pool Difficulty to {:?}",
+                                                    pool_config.difficulty.unwrap_or_default()
+                                                );
+                                                pool_states
+                                                    .write()
+                                                    .await
+                                                    .get_mut(&pool_config.p2_singleton_puzzle_hash)
+                                                    .unwrap_or_else(|| panic!("Item Added to Map Above, Expected {} to exist",
+                                                                              &pool_config.p2_singleton_puzzle_hash))
+                                                    .current_difficulty = pool_config.difficulty
+                                            } else if let Some(false) = res.payout_instructions {
+                                                error!("Pool Rejected Updating Difficulty")
+                                            }
                                         }
                                         info!("Farmer Update Response: {:?}", res);
                                     }
@@ -639,7 +732,10 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
                         }
                     }
                 } else {
-                    warn!("No pool specific authentication_token_timeout has been set for {}, check communication with the pool.", &pool_config.p2_singleton_puzzle_hash);
+                    warn!(
+                        "No pool specific authentication_token_timeout has been set for {}, check communication with the pool.",
+                        &pool_config.p2_singleton_puzzle_hash
+                    );
                 }
             }
         } else {
@@ -649,4 +745,5 @@ pub async fn update_pool_state<'a, T: 'a + PoolClient + Sized + Sync + Send>(
             );
         }
     }
+    Ok(())
 }

@@ -1,38 +1,72 @@
-use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
-use crate::harvesters::{Harvesters, SignatureHandler};
 use crate::PROTOCOL_VERSION;
+use crate::farmer::FarmerSharedState;
+use crate::farmer::config::Config;
+use crate::harvesters::{Harvester, SignatureHandler};
 use async_trait::async_trait;
-use blst::min_pk::AggregateSignature;
 use blst::BLST_ERROR;
+use blst::min_pk::AggregateSignature;
 use dg_xch_clients::api::pool::PoolClient;
+use dg_xch_clients::websocket::farmer::FarmerClient;
 use dg_xch_core::blockchain::pool_target::PoolTarget;
 use dg_xch_core::blockchain::proof_of_space::{generate_plot_public_key, generate_taproot_sk};
 use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes96};
-use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
-use dg_xch_core::consensus::constants::ConsensusConstants;
+use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend};
+use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, ConsensusConstants, MAINNET};
+use dg_xch_core::constants::AUG_SCHEME_DST;
 use dg_xch_core::protocols::farmer::{DeclareProofOfSpace, SignedValues};
 use dg_xch_core::protocols::harvester::RespondSignatures;
 use dg_xch_core::protocols::{ChiaMessage, ProtocolMessageTypes};
+use dg_xch_core::traits::SizedBytes;
 use dg_xch_keys::{decode_puzzle_hash, parse_payout_address};
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
-use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
+use std::str::FromStr;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
 
-pub struct RespondSignaturesHandler<T: PoolClient + Sized + Sync + Send + 'static> {
-    pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    pub harvester_id: Bytes32,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
+pub struct RespondSignaturesHandler<P, T, H, C>
+where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
+    pub pool_client: Arc<P>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
+    pub harvester: Arc<H>,
     pub constants: &'static ConsensusConstants,
+    pub config: Arc<RwLock<Config<C>>>,
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>,
 }
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
-    for RespondSignaturesHandler<T>
+impl<P, T, H, C> SignatureHandler<T, H, C> for RespondSignaturesHandler<P, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
 {
+    async fn load(
+        shared_state: Arc<FarmerSharedState<T>>,
+        config: Arc<RwLock<Config<C>>>,
+        harvester: Arc<H>,
+        client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    ) -> Result<Arc<Self>, Error> {
+        let network = config.read().await.selected_network.clone();
+        let s = Self {
+            pool_client: Arc::new(P::default()),
+            shared_state,
+            harvester,
+            constants: CONSENSUS_CONSTANTS_MAP.get(&network).unwrap_or(&MAINNET),
+            config,
+            client,
+        };
+        Ok(Arc::new(s))
+    }
+
     async fn handle_signature(&self, response: RespondSignatures) -> Result<(), Error> {
         if let Some(sps) = self
             .shared_state
@@ -90,8 +124,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                     if let Some(computed_quality_string) = verify_and_get_quality_string(
                         &pospace,
                         self.constants,
-                        &response.challenge_hash,
-                        &response.sp_hash,
+                        response.challenge_hash,
+                        response.sp_hash,
                         peak_height,
                     ) {
                         if is_sp_signatures {
@@ -105,12 +139,10 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                             let local_pk = response.local_pk.into();
                             for (_, sk) in self.shared_state.farmer_private_keys.iter() {
                                 let pk = sk.sk_to_pk();
-                                if pk.to_bytes() == *response.farmer_pk.to_sized_bytes() {
+                                if pk.to_bytes() == response.farmer_pk.bytes() {
                                     let agg_pk =
                                         generate_plot_public_key(&local_pk, &pk, include_taproot)?;
-                                    if agg_pk.to_bytes()
-                                        != *pospace.plot_public_key.to_sized_bytes()
-                                    {
+                                    if agg_pk.to_bytes() != pospace.plot_public_key.bytes() {
                                         warn!(
                                             "Key Mismatch {:?} != {:?}",
                                             pospace.plot_public_key, agg_pk
@@ -206,6 +238,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         );
                                         return Ok(());
                                     }
+                                    let config = self.config.read().await;
                                     let (pool_target, pool_target_signature) = if let Some(
                                         pool_public_key,
                                     ) =
@@ -217,14 +250,16 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                             let pool_target = PoolTarget {
                                                 max_height: 0,
                                                 puzzle_hash: decode_puzzle_hash(
-                                                    &self.shared_state.data.config.payout_address,
+                                                    &config.payout_address,
                                                 )?,
                                             };
                                             let pool_target_signature =
                                                 sign(sk, &pool_target.to_bytes(PROTOCOL_VERSION));
                                             (Some(pool_target), Some(pool_target_signature))
                                         } else {
-                                            error!("Don't have the private key for the pool key used by harvester: {pool_public_key}");
+                                            error!(
+                                                "Don't have the private key for the pool key used by harvester: {pool_public_key}"
+                                            );
                                             return Ok(());
                                         }
                                     } else {
@@ -251,9 +286,9 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         {
                                             farmer_reward_address_override
                                         } else {
-                                            Bytes32::from(parse_payout_address(
-                                                &self.shared_state.data.config.payout_address,
-                                            )?)
+                                            Bytes32::from_str(&parse_payout_address(
+                                                &config.payout_address,
+                                            )?)?
                                         },
                                         pool_target,
                                         pool_signature: pool_target_signature
@@ -262,15 +297,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                             .include_source_signature_data
                                             || response.farmer_reward_address_override.is_some(),
                                     };
-                                    if let Some(client) = self
-                                        .shared_state
-                                        .data
-                                        .full_node_client
-                                        .read()
-                                        .await
-                                        .as_ref()
-                                    {
-                                        let _ = client
+                                    if let Some(client) = &*self.client.read().await {
+                                        client
                                             .client
                                             .connection
                                             .write()
@@ -282,9 +310,10 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(PROTOCOL_VERSION),
+                                                .to_bytes(PROTOCOL_VERSION)
+                                                .into(),
                                             ))
-                                            .await;
+                                            .await?;
                                         debug!("Declaring Proof of Space: {:?}", request);
                                         let top = format!("{:🌱<1$}", "", 43);
                                         let mid = format!(
@@ -293,7 +322,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                         );
                                         let bottom = format!("{:🌱<1$}", "", 43);
                                         info!("\n{top}\n{mid}\n{bottom}");
-                                        if let Some(Some(declared)) = self
+                                        if let Some(declared) = self
                                             .shared_state
                                             .metrics
                                             .read()
@@ -324,7 +353,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                             let local_pk = response.local_pk.into();
                             for (_, sk) in self.shared_state.farmer_private_keys.iter() {
                                 let pk = sk.sk_to_pk();
-                                if pk.to_bytes() == *response.farmer_pk.to_sized_bytes() {
+                                if pk.to_bytes() == response.farmer_pk.bytes() {
                                     let agg_pk =
                                         generate_plot_public_key(&local_pk, &pk, include_taproot)?;
                                     let (
@@ -433,15 +462,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                             .to_bytes()
                                             .into(),
                                     };
-
-                                    if let Some(client) = self
-                                        .shared_state
-                                        .data
-                                        .full_node_client
-                                        .read()
-                                        .await
-                                        .as_ref()
-                                    {
+                                    if let Some(client) = self.client.read().await.as_ref() {
                                         let _ = client
                                             .client
                                             .connection
@@ -454,7 +475,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler
                                                     &request,
                                                     None,
                                                 )
-                                                .to_bytes(PROTOCOL_VERSION),
+                                                .to_bytes(PROTOCOL_VERSION)
+                                                .into(),
                                             ))
                                             .await;
                                         debug!("Sending Signed Values: {:?}", request);

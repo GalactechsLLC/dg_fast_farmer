@@ -3,7 +3,7 @@
 FastFarmer
 =====
 
-A lite farmer for the Chia Blockchain.
+A lite farmer for the Chia Blockchain. Official FastFarmer Releases are from GalactechsLLC.
 
 
 Building

@@ -1,7 +1,7 @@
 [package]
 name = "dg_fast_farmer"
-version = "1.0.3"
-edition = "2021"
+version = "2.0.0"
+edition = "2024"
 authors = ["James Hoerr"]
 description = "A lite farmer for the Chia Blockchain."
 license = "Apache-2.0"
@@ -17,49 +17,41 @@ codegen-units = 1
 lto = "fat"
 
 [dependencies]
-actix-web = "4.5.1"
-async-trait = "0.1.79"
-bip39 = {version= "2.0.0", features=["rand"] }
-blst = "0.3.11"
+async-trait = "0.1.86"
+bip39 = {version= "2.1.0", features=["rand"] }
+blst = "0.3.14"
 bytefmt = "0.1.7"
-clap = { version = "4.5.4", features = ["derive"] }
-chrono = "0.4.37"
-crossterm = "0.27.0"
+clap = { version = "4.5.30", features = ["derive"] }
+crossterm = "0.28.1"
 dialoguer = "0.11.0"
-dg_xch_cli = { path="./dg_xch_utils/cli", version="2.0.3" }
-dg_xch_clients = { path="./dg_xch_utils/clients", version="2.0.3", features = ["metrics"] }
-dg_xch_core = { path="./dg_xch_utils/core", version = "2.0.3", default-features = false, features = ["metrics"] }
-dg_xch_keys = { path="./dg_xch_utils/keys", version="2.0.3" }
-dg_xch_macros = { path="./dg_xch_utils/macros", version="2.0.3" }
-dg_xch_pos = { path="./dg_xch_utils/proof_of_space", version="2.0.3" }
-dg_xch_puzzles = { path="./dg_xch_utils/puzzles", version="2.0.3" }
-dg_xch_serialize = { path="./dg_xch_utils/serialize", version="2.0.3" }
-dg_xch_servers = { path="./dg_xch_utils/servers", version="2.0.3", features = ["metrics"] }
-futures-util = "0.3.30"
+dg_xch_cli = { path="./dg_xch_utils/cli", version="2.1.1" }
+dg_xch_clients = { path="./dg_xch_utils/clients", version="2.1.1", features = ["metrics"] }
+dg_xch_core = { path="./dg_xch_utils/core", version = "2.1.1", default-features = false, features = ["metrics"] }
+dg_xch_keys = { path="./dg_xch_utils/keys", version="2.1.1" }
+dg_logger = { path="./dg_xch_utils/logging", version="2.1.1" }
+dg_xch_pos = { path="./dg_xch_utils/proof_of_space", version="2.1.1" }
+dg_xch_puzzles = { path="./dg_xch_utils/puzzles", version="2.1.1" }
+dg_xch_serialize = { path="./dg_xch_utils/serialize", version="2.1.1" }
+futures-util = "0.3.31"
 hex = "0.4.3"
-home = "0.5.9"
-libc = "0.2.153"
-log = "0.4.21"
-notify = "6.1.1"
-num-bigint = "0.4.4"
-once_cell = "1.19.0"
-prometheus = {version="0.13.3", features=["protobuf"]}
-protobuf = "2.27.1"
-rand = { version = "0.8.5", features = [] }
-ratatui = "0.26.1"
-rayon = "1.10.0"
-reqwest = {version="0.12.3", default-features = false, features =["rustls-tls", "json"]}
-serde = {version="1.0.197", features = ["derive"]}
-serde_json = "1.0.115"
+home = "0.5.11"
+log = "0.4.26"
+once_cell = "1.20.3"
+portfu = { version = "1.3.0" }
+prometheus = {version="0.13.4", features=["protobuf"]}
+rand = "0.8.5"
+ratatui = "0.29.0"
+serde = {version="1.0.218", features = ["derive"]}
 serde_yaml = "0.9.33"
-simple_logger = "4.3.3"
-sysinfo = "0.30.9"
-tokio = {version = "1.37.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
-tokio-tungstenite = {version = "0.20.1", features = ["rustls-tls-webpki-roots", "rustls"] }
-tui-logger = {version = "0.11.0", default-features = false}
-uuid = {version="1.8.0", features=["v4"]}
-num-integer = "0.1.46"
-regex = "1.10.4"
+sysinfo = "0.33.1"
+time = "0.3.37"
+tokio = {version = "1.43.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+tokio-tungstenite = {version = "0.26.2", features = ["rustls", "rustls-tls-webpki-roots"] }
+tui-logger = {version = "0.14.5", default-features = false}
+regex = "1.11.1"
+rustls = {version = "0.23.27" }
+uuid = {version="1.14.0", features=["v4"]}
 
-[build-dependencies]
-bindgen = "0.69.4"
+#Needed for Building 3rd Party Harvesters
+#[build-dependencies]
+#bindgen = "0.71.1"

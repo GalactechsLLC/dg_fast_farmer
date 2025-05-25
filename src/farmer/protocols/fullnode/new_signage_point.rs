@@ -1,39 +1,57 @@
-use crate::farmer::protocols::harvester::new_proof_of_space::NewProofOfSpaceHandle;
-use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
-use crate::harvesters::{Harvester, Harvesters};
 use crate::PROTOCOL_VERSION;
+use crate::farmer::FarmerSharedState;
+use crate::farmer::config::Config;
+use crate::harvesters::{Harvester, ProofHandler};
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
+use dg_xch_clients::websocket::farmer::FarmerClient;
 use dg_xch_core::blockchain::proof_of_space::calculate_prefix_bits;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::consensus::constants::ConsensusConstants;
-use dg_xch_core::consensus::pot_iterations::POOL_SUB_SLOT_ITERS;
-use dg_xch_core::protocols::farmer::{FarmerPoolState, NewSignagePoint};
+use dg_xch_core::constants::POOL_SUB_SLOT_ITERS;
+use dg_xch_core::protocols::farmer::{FarmerPoolState, MostRecentSignagePoint, NewSignagePoint};
 use dg_xch_core::protocols::harvester::{NewSignagePointHarvester, PoolDifficulty};
 use dg_xch_core::protocols::{ChiaMessage, MessageHandler, PeerMap};
 use dg_xch_serialize::ChiaSerialize;
-use log::{debug, error, info, warn};
-use std::collections::hash_map::Entry;
+use log::{debug, error, warn};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::{Cursor, Error};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-pub struct NewSignagePointHandle<T: PoolClient + Sized + Sync + Send + 'static> {
+pub struct NewSignagePointHandle<P, O, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
     pub id: Uuid,
     pub harvester_id: Bytes32,
     pub pool_state: Arc<RwLock<HashMap<Bytes32, FarmerPoolState>>>,
-    pub pool_client: Arc<T>,
+    pub pool_client: Arc<P>,
     pub signage_points: Arc<RwLock<HashMap<Bytes32, Vec<NewSignagePoint>>>>,
     pub cache_time: Arc<RwLock<HashMap<Bytes32, Instant>>>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
+    pub harvester: Arc<H>,
     pub constants: &'static ConsensusConstants,
+    pub config: Arc<RwLock<Config<C>>>,
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    pub proof_handle: Arc<O>,
 }
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignagePointHandle<T> {
+impl<P, O, T, H, C> MessageHandler for NewSignagePointHandle<P, O, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
     async fn handle(
         &self,
         msg: Arc<ChiaMessage>,
@@ -55,32 +73,36 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
                     debug!("Self Pooling Detected for {p2_singleton_puzzle_hash}");
                     continue;
                 } else if let Some(difficulty) = pool_dict.current_difficulty {
-                    debug!("Using Difficulty {difficulty} for p2_singleton_puzzle_hash: {p2_singleton_puzzle_hash}");
+                    debug!(
+                        "Using Difficulty {difficulty} for p2_singleton_puzzle_hash: {p2_singleton_puzzle_hash}"
+                    );
                     pool_difficulties.push(PoolDifficulty {
                         difficulty,
                         sub_slot_iters: POOL_SUB_SLOT_ITERS,
                         pool_contract_puzzle_hash: *p2_singleton_puzzle_hash,
                     })
                 } else {
-                    warn!("No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this signage point, pool: {}", &config.pool_url);
+                    warn!(
+                        "No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this signage point, pool: {}",
+                        &config.pool_url
+                    );
                     continue;
                 }
             }
         }
-        info!(
+        debug!(
             "New Signage Point({}): {:?}",
             sp.signage_point_index, sp.challenge_hash
         );
         let now = Instant::now();
         let time_since_last_sp = now
-            .duration_since(*self.shared_state.data.last_sp_timestamp.read().await)
+            .duration_since(*self.shared_state.last_sp_timestamp.read().await)
             .as_millis();
-        self.shared_state
-            .data
-            .extended_metrics
-            .signage_point_interval
-            .observe(time_since_last_sp as f64 / 1000f64);
-        *self.shared_state.data.last_sp_timestamp.write().await = now;
+        if let Some(m) = &*self.shared_state.metrics.read().await {
+            m.signage_point_interval
+                .observe(time_since_last_sp as f64 / 1000f64);
+        }
+        *self.shared_state.last_sp_timestamp.write().await = now;
         let filter_prefix_bits = calculate_prefix_bits(self.constants, sp.peak_height);
         let sp_hash = sp.challenge_chain_sp;
         let harvester_point = Arc::new(NewSignagePointHarvester {
@@ -96,12 +118,11 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             .write()
             .await
             .insert(sp_hash, Instant::now());
-        self.shared_state
-            .data
-            .gui_stats
-            .write()
-            .await
-            .most_recent_sp = (sp.challenge_hash, sp.signage_point_index);
+        *self.shared_state.most_recent_sp.write().await = MostRecentSignagePoint {
+            hash: sp.challenge_hash,
+            index: sp.signage_point_index,
+            timestamp: Instant::now(),
+        };
         match self.signage_points.write().await.entry(sp_hash) {
             Entry::Occupied(mut e) => {
                 e.get_mut().push(sp);
@@ -111,33 +132,23 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler for NewSignag
             }
         }
         debug!("Sending NewSignagePoint to Harvesters, Using Filter Bits: {filter_prefix_bits}");
-        for (_, harvester) in self.harvesters.iter() {
-            let harvester_point = harvester_point.clone();
-            let harvesters = self.harvesters.clone();
-            let pool_client = self.pool_client.clone();
-            let shared_state = self.shared_state.clone();
-            let constants = self.constants;
-            let harvester = harvester.clone();
-            tokio::spawn(async move {
-                match harvester.as_ref() {
-                    Harvesters::DruidGarden(harvester) => {
-                        let proof_handle = NewProofOfSpaceHandle {
-                            pool_client,
-                            shared_state,
-                            harvester_id: harvester.uuid,
-                            harvesters,
-                            constants,
-                        };
-                        if let Err(e) = harvester
-                            .new_signage_point(harvester_point, proof_handle)
-                            .await
-                        {
-                            error!("Error Handling Signage Point: {}", e);
-                        }
-                    }
-                }
-            });
-        }
+        let harvester_point = harvester_point.clone();
+        let shared_state = self.shared_state.clone();
+        let harvester = self.harvester.clone();
+        let config = self.config.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            if let Err(e) = harvester
+                .new_signage_point(
+                    harvester_point,
+                    O::load(shared_state, config, harvester.clone(), client.clone()).await?,
+                )
+                .await
+            {
+                error!("Error Handling Signage Point: {}", e);
+            }
+            Ok::<(), Error>(())
+        });
         debug!("Finished Processing SignagePoint: {sp_hash}");
         Ok(())
     }

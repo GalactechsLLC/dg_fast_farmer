@@ -1,46 +1,86 @@
-use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
-use crate::farmer::{load_client_id, ExtendedFarmerSharedState, FarmerSharedState};
-use crate::harvesters::{Harvester, Harvesters, ProofHandler, SignatureHandler};
+use crate::farmer::config::Config;
+use crate::farmer::{FarmerSharedState, load_client_id};
+use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
 use crate::{HEADERS, PROTOCOL_VERSION};
 use async_trait::async_trait;
-use blst::min_pk::{AggregateSignature, PublicKey, Signature};
 use blst::BLST_ERROR;
+use blst::min_pk::{AggregateSignature, PublicKey, Signature};
 use dg_xch_clients::api::pool::PoolClient;
+use dg_xch_clients::websocket::farmer::FarmerClient;
 use dg_xch_core::blockchain::proof_of_space::{generate_plot_public_key, generate_taproot_sk};
-use dg_xch_core::blockchain::sized_bytes::{Bytes32, SizedBytes};
-use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend, AUG_SCHEME_DST};
-use dg_xch_core::consensus::constants::ConsensusConstants;
+use dg_xch_core::blockchain::sized_bytes::Bytes32;
+use dg_xch_core::clvm::bls_bindings::{sign, sign_prepend};
+use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, ConsensusConstants, MAINNET};
 use dg_xch_core::consensus::pot_iterations::{
     calculate_iterations_quality, calculate_sp_interval_iters,
 };
+use dg_xch_core::constants::AUG_SCHEME_DST;
 use dg_xch_core::protocols::farmer::{FarmerIdentifier, NewSignagePoint};
 use dg_xch_core::protocols::harvester::{
     NewProofOfSpace, RequestSignatures, RespondSignatures, SignatureRequestSourceData,
     SigningDataKind,
 };
 use dg_xch_core::protocols::pool::{
-    get_current_authentication_token, PoolErrorCode, PostPartialPayload, PostPartialRequest,
+    PoolErrorCode, PostPartialPayload, PostPartialRequest, get_current_authentication_token,
 };
+use dg_xch_core::traits::SizedBytes;
+use dg_xch_core::utils::hash_256;
 use dg_xch_pos::verify_and_get_quality_string;
-use dg_xch_serialize::{hash_256, ChiaSerialize};
+use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
-use std::sync::atomic::Ordering;
+use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
+use tokio::sync::RwLock;
 
-pub struct NewProofOfSpaceHandle<T: PoolClient + Sized + Sync + Send + 'static> {
-    pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    pub harvester_id: Bytes32,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
+pub struct NewProofOfSpaceHandle<P, S, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
+    pub pool_client: Arc<P>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
+    pub harvester: Arc<H>,
     pub constants: &'static ConsensusConstants,
+    pub config: Arc<RwLock<Config<C>>>,
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    phantom_data: PhantomData<S>,
 }
 
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfSpaceHandle<T> {
+impl<P, S, T, H, C> ProofHandler<T, H, C> for NewProofOfSpaceHandle<P, S, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
+    async fn load(
+        shared_state: Arc<FarmerSharedState<T>>,
+        config: Arc<RwLock<Config<C>>>,
+        harvester: Arc<H>,
+        client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    ) -> Result<Arc<Self>, Error> {
+        let network = config.read().await.selected_network.clone();
+        let s = Self {
+            pool_client: Arc::new(P::default()),
+            shared_state: shared_state.clone(),
+            harvester: harvester.clone(),
+            constants: CONSENSUS_CONSTANTS_MAP.get(&network).unwrap_or(&MAINNET),
+            config,
+            client,
+            phantom_data: PhantomData {},
+        };
+        Ok(Arc::new(s))
+    }
+
     async fn handle_proof(&self, new_pos: NewProofOfSpace) -> Result<(), Error> {
         debug!("Got NewProofOfSpace, Searching for SP: {}", new_pos.sp_hash);
         if let Some(sps) = self
@@ -58,16 +98,16 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfS
                 if let Some(qs) = verify_and_get_quality_string(
                     &new_pos.proof,
                     self.constants,
-                    &new_pos.challenge_hash,
-                    &new_pos.sp_hash,
+                    new_pos.challenge_hash,
+                    new_pos.sp_hash,
                     sp.peak_height,
                 ) {
                     let required_iters = calculate_iterations_quality(
                         self.constants.difficulty_constant_factor,
-                        &qs,
+                        qs,
                         new_pos.proof.size,
                         sp.difficulty,
-                        &new_pos.sp_hash,
+                        new_pos.sp_hash,
                     );
                     if required_iters
                         < calculate_sp_interval_iters(self.constants, sp.sub_slot_iters)?
@@ -76,7 +116,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfS
                             let mut to_hash: Vec<u8> = vec![];
                             to_hash.extend_from_slice(new_pos.proof.proof.as_ref());
                             to_hash.extend_from_slice(new_pos.proof.challenge.as_ref());
-                            let condition_hash = hash_256(&to_hash);
+                            let condition_hash = hash_256(to_hash);
                             let value = u32::from_be_bytes(
                                 condition_hash[28..32]
                                     .try_into()
@@ -87,7 +127,8 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> ProofHandler for NewProofOfS
                                     "Using 3rd Party Harvester Fee for challenge {}, Threshold {:.3}%/{:.3}% ({}/{})",
                                     sp.challenge_hash,
                                     value as f64 / 0xFFFFFFFFu32 as f64 * 100f64,
-                                    fee_info.applied_fee_threshold as f64 / 0xFFFFFFFFu32 as f64 * 100f64,
+                                    fee_info.applied_fee_threshold as f64 / 0xFFFFFFFFu32 as f64
+                                        * 100f64,
                                     format_big_number(value),
                                     format_big_number(fee_info.applied_fee_threshold),
                                 );
@@ -140,7 +181,14 @@ fn format_big_number(number: u32) -> String {
         .join(",")
 }
 
-impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
+impl<P, S, T, H, C> NewProofOfSpaceHandle<P, S, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
     async fn _handle_proof(&self, sp: &NewSignagePoint, qs: &Bytes32, new_pos: &NewProofOfSpace) {
         match self
             .shared_state
@@ -175,7 +223,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
                     plot_identifier: new_pos.plot_identifier.clone(),
                     challenge_hash: new_pos.challenge_hash,
                     sp_hash: new_pos.sp_hash,
-                    peer_node_id: self.harvester_id,
+                    peer_node_id: self.harvester.uuid(),
                 },
             );
         self.shared_state
@@ -183,13 +231,13 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
             .write()
             .await
             .insert(*qs, Instant::now());
-        let sig_handle = RespondSignaturesHandler {
-            pool_client: self.pool_client.clone(),
-            shared_state: self.shared_state.clone(),
-            harvester_id: self.harvester_id,
-            harvesters: self.harvesters.clone(),
-            constants: self.constants,
-        };
+        let sig_handle = S::load(
+            self.shared_state.clone(),
+            self.config.clone(),
+            self.harvester.clone(),
+            self.client.clone(),
+        )
+        .await;
         let sp_src_data = {
             if new_pos.include_source_signature_data
                 || new_pos.farmer_reward_address_override.is_some()
@@ -238,18 +286,13 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
             message_data: sp_src_data,
             rc_block_unfinished: None,
         };
-        if let Some(h) = self.harvesters.get(&self.harvester_id) {
-            let harvester = h.clone();
-            tokio::spawn(async move {
-                match harvester.as_ref() {
-                    Harvesters::DruidGarden(harvester) => {
-                        if let Err(e) = harvester.request_signatures(request, sig_handle).await {
-                            error!("Error Requesting Signature: {}", e);
-                        }
-                    }
-                }
-            });
-        }
+        let harvester = self.harvester.clone();
+        tokio::spawn(async move {
+            if let Err(e) = harvester.request_signatures(request, sig_handle?).await {
+                error!("Error Requesting Signature: {}", e);
+            }
+            Ok::<(), Error>(())
+        });
     }
 
     async fn handle_partial(
@@ -297,15 +340,18 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
             (
                 calculate_iterations_quality(
                     self.constants.difficulty_constant_factor,
-                    qs,
+                    *qs,
                     new_pos.proof.size,
                     pool_dif,
-                    &new_pos.sp_hash,
+                    new_pos.sp_hash,
                 ),
                 pool_dif,
             )
         } else {
-            warn!("No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this partial to {}.", pool_url);
+            warn!(
+                "No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this partial to {}.",
+                pool_url
+            );
             return Ok(());
         };
         let pool_required_iters =
@@ -327,17 +373,18 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
         {
             auth_token_timeout
         } else {
-            warn!("No pool specific authentication_token_timeout has been set for {p2_singleton_puzzle_hash}, check communication with the pool.");
+            warn!(
+                "No pool specific authentication_token_timeout has been set for {p2_singleton_puzzle_hash}, check communication with the pool."
+            );
             return Ok(());
         };
-        let shared_state = self.shared_state.clone();
         let payload = PostPartialPayload {
             launcher_id,
             authentication_token: get_current_authentication_token(auth_token_timeout),
             proof_of_space: new_pos.proof.clone(),
             sp_hash: new_pos.sp_hash,
             end_of_sub_slot: new_pos.signage_point_index == 0,
-            harvester_id: load_client_id(shared_state.as_ref()).await?,
+            harvester_id: load_client_id::<C>(self.config.clone()).await?,
         };
         let payload_bytes = hash_256(payload.to_bytes(PROTOCOL_VERSION));
         let sp_src_data = {
@@ -356,51 +403,39 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> NewProofOfSpaceHandle<T> {
             plot_identifier: new_pos.plot_identifier.clone(),
             challenge_hash: new_pos.challenge_hash,
             sp_hash: new_pos.sp_hash,
-            messages: vec![Bytes32::new(&payload_bytes)],
+            messages: vec![Bytes32::new(payload_bytes)],
             message_data: sp_src_data,
             rc_block_unfinished: None,
         };
         let handler = PartialHandler {
+            config: self.config.clone(),
             pool_client: self.pool_client.clone(),
             shared_state: self.shared_state.clone(),
             p2_singleton_puzzle_hash: *p2_singleton_puzzle_hash,
             new_pos,
             auth_token_timeout,
             payload,
-            payload_bytes,
+            payload_bytes: payload_bytes.to_vec(),
             pool_dif,
         };
-        if let Some(h) = self.harvesters.get(&self.harvester_id) {
-            let harvester = h.clone();
-            tokio::spawn(async move {
-                match harvester.as_ref() {
-                    Harvesters::DruidGarden(h) => {
-                        if let Err(e) = h.request_signatures(request, handler).await {
-                            error!("Error Requesting Signature: {}", e);
-                        }
-                    }
-                }
-            });
-        } else {
-            error!("Failed to find harvester with ID {}", &self.harvester_id);
-        }
+        let harvester = self.harvester.clone();
+        tokio::spawn(async move {
+            if let Err(e) = harvester.request_signatures(request, handler).await {
+                error!("Error Requesting Signature: {}", e);
+            }
+        });
         Ok(())
     }
 }
 
-pub struct FullProofHandler<T: PoolClient + Sized + Sync + Send + 'static> {
-    pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    pub auth_token_timeout: u8,
-    pub p2_singleton_puzzle_hash: Bytes32,
-    pub new_pos: NewProofOfSpace,
-    pub payload: PostPartialPayload,
-    pub payload_bytes: Vec<u8>,
-}
-
-pub struct PartialHandler<T: PoolClient + Sized + Sync + Send + 'static> {
-    pub pool_client: Arc<T>,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+pub struct PartialHandler<
+    T: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+> {
+    pub pool_client: Arc<P>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
+    pub config: Arc<RwLock<Config<C>>>,
     pub auth_token_timeout: u8,
     pub p2_singleton_puzzle_hash: Bytes32,
     pub new_pos: NewProofOfSpace,
@@ -409,10 +444,28 @@ pub struct PartialHandler<T: PoolClient + Sized + Sync + Send + 'static> {
     pub pool_dif: u64,
 }
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for PartialHandler<T> {
+impl<
+    T: Sync + Send + 'static,
+    H: Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+> SignatureHandler<T, H, C> for PartialHandler<T, C, P>
+{
+    async fn load(
+        _shared_state: Arc<FarmerSharedState<T>>,
+        _config: Arc<RwLock<Config<C>>>,
+        _harvester: Arc<H>,
+        _client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    ) -> Result<Arc<Self>, Error> {
+        Err(Error::new(
+            ErrorKind::Other,
+            "Do not Create Partial Handler with Load. Create it Directly with PartialHandler { .. }",
+        ))
+    }
+
     async fn handle_signature(&self, respond_sigs: RespondSignatures) -> Result<(), Error> {
         let response_msg_sig = if let Some(f) = respond_sigs.message_signatures.first() {
-            Signature::from_bytes(f.1.to_sized_bytes())
+            Signature::from_bytes(&f.1.bytes())
                 .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?
         } else {
             return Err(Error::new(
@@ -421,12 +474,12 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
             ));
         };
         let mut plot_sig = None;
-        let local_pk = PublicKey::from_bytes(respond_sigs.local_pk.to_sized_bytes())
+        let local_pk = PublicKey::from_bytes(&respond_sigs.local_pk.bytes())
             .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
         for (pk, sk) in self.shared_state.farmer_private_keys.iter() {
             if *pk == respond_sigs.farmer_pk {
                 let agg_pk = generate_plot_public_key(&local_pk, &pk.into(), true)?;
-                if agg_pk.to_bytes() != *self.new_pos.proof.plot_public_key.to_sized_bytes() {
+                if agg_pk.to_bytes() != self.new_pos.proof.plot_public_key.bytes() {
                     return Err(Error::new(ErrorKind::InvalidInput, "Key Mismatch"));
                 }
                 let sig_farmer = sign_prepend(sk, &self.payload_bytes, &agg_pk);
@@ -499,8 +552,7 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                 };
                 debug!(
                     "Submitting partial for {} to {}",
-                    post_request.payload.launcher_id.to_string(),
-                    &pool_url
+                    post_request.payload.launcher_id, &pool_url
                 );
                 if let Some(v) = self
                     .shared_state
@@ -515,31 +567,46 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                 if let Some(r) = self.shared_state.metrics.read().await.as_ref() {
                     use std::time::Duration;
                     let now = Instant::now();
-                    if let Some(c) = &r.points_found_24h {
-                        if let Some(v) = self
-                            .shared_state
-                            .pool_states
-                            .write()
-                            .await
-                            .get_mut(&self.p2_singleton_puzzle_hash)
-                        {
-                            c.with_label_values(&[&&self.p2_singleton_puzzle_hash.to_string()])
-                                .set(
-                                    v.points_found_24h
-                                        .iter()
-                                        .filter(|v| {
-                                            now.duration_since(v.0)
-                                                < Duration::from_secs(60 * 60 * 24)
-                                        })
-                                        .map(|v| v.1)
-                                        .sum(),
-                                )
-                        }
+                    if let Some(v) = self
+                        .shared_state
+                        .pool_states
+                        .write()
+                        .await
+                        .get_mut(&self.p2_singleton_puzzle_hash)
+                    {
+                        r.points_found_24h
+                            .with_label_values(&[&self.p2_singleton_puzzle_hash.to_string()])
+                            .set(
+                                v.points_found_24h
+                                    .iter()
+                                    .filter(|v| {
+                                        now.duration_since(v.0) < Duration::from_secs(60 * 60 * 24)
+                                    })
+                                    .map(|v| v.1)
+                                    .sum(),
+                            )
                     }
                 }
+                let mut headers = self.shared_state.additional_headers.as_ref().clone();
+                if let Some(v) = &*self.shared_state.upstream_handshake.read().await {
+                    headers.insert(String::from("X-chia-version"), v.software_version.clone());
+                    headers.insert(
+                        String::from("chia-node-version"),
+                        v.software_version.clone(),
+                    );
+                    headers.insert(
+                        String::from("chia-farmer-version"),
+                        v.software_version.clone(),
+                    );
+                    headers.insert(
+                        String::from("chia-harvester-version"),
+                        v.software_version.clone(),
+                    );
+                }
+                headers.extend(HEADERS.clone());
                 match self
                     .pool_client
-                    .post_partial(&pool_url, post_request, &Some(HEADERS.clone()))
+                    .post_partial(&pool_url, post_request, &Some(headers))
                     .await
                 {
                     Ok(resp) => {
@@ -555,15 +622,16 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> SignatureHandler for Partial
                                 info!("New Pool Difficulty: {:?} ", v.current_difficulty);
                                 v.current_difficulty = Some(resp.new_difficulty);
                             }
-                            info!("Current Points: {:?} ", v.current_points);
+                            debug!("Current Points: {:?} ", v.current_points);
                         }
                     }
                     Err(e) => {
                         error!("Error in pooling: {:?}", e);
                         if e.error_code == PoolErrorCode::ProofNotGoodEnough as u8 {
-                            error!("Partial not good enough, forcing pool farmer update to get our current difficulty.");
+                            error!(
+                                "Partial not good enough, forcing pool farmer update to get our current difficulty."
+                            );
                             self.shared_state
-                                .data
                                 .force_pool_update
                                 .store(true, Ordering::Relaxed);
                         }

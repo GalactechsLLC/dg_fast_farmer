@@ -1,9 +1,10 @@
-use crate::farmer::protocols::harvester::respond_signatures::RespondSignaturesHandler;
-use crate::farmer::{ExtendedFarmerSharedState, FarmerSharedState};
-use crate::harvesters::{Harvester, Harvesters};
 use crate::PROTOCOL_VERSION;
+use crate::farmer::FarmerSharedState;
+use crate::farmer::config::Config;
+use crate::harvesters::{Harvester, SignatureHandler};
 use async_trait::async_trait;
 use dg_xch_clients::api::pool::PoolClient;
+use dg_xch_clients::websocket::farmer::FarmerClient;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_core::protocols::farmer::RequestSignedValues;
@@ -13,21 +14,36 @@ use dg_xch_core::protocols::harvester::{
 use dg_xch_core::protocols::{ChiaMessage, MessageHandler, PeerMap};
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error};
-use std::collections::HashMap;
 use std::io::{Cursor, Error, ErrorKind};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-pub struct RequestSignedValuesHandle<T: PoolClient + Sized + Sync + Send + 'static> {
+pub struct RequestSignedValuesHandle<P, S, T, H, C>
+where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
     pub id: Uuid,
-    pub shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    pub pool_client: Arc<T>,
-    pub harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
+    pub shared_state: Arc<FarmerSharedState<T>>,
+    pub pool_client: Arc<P>,
+    pub harvester: Arc<H>,
     pub constants: &'static ConsensusConstants,
+    pub config: Arc<RwLock<Config<C>>>,
+    pub client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    pub signature_handle: Arc<S>,
 }
 #[async_trait]
-impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
-    for RequestSignedValuesHandle<T>
+impl<P, S, T, H, C> MessageHandler for RequestSignedValuesHandle<P, S, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
 {
     async fn handle(
         &self,
@@ -72,28 +88,17 @@ impl<T: PoolClient + Sized + Sync + Send + 'static> MessageHandler
                 message_data: Some(vec![foliage_block_data, foliage_transaction_block]),
                 rc_block_unfinished: request.rc_block_unfinished,
             };
-            let sig_handle = RespondSignaturesHandler {
-                pool_client: self.pool_client.clone(),
-                shared_state: self.shared_state.clone(),
-                harvester_id: identifier.peer_node_id,
-                harvesters: self.harvesters.clone(),
-                constants: self.constants,
-            };
-            if let Some(h) = self.harvesters.get(&identifier.peer_node_id) {
-                let harvester = h.clone();
-                tokio::spawn(async move {
-                    match harvester.as_ref() {
-                        Harvesters::DruidGarden(harvester) => {
-                            if let Err(e) = harvester.request_signatures(request, sig_handle).await
-                            {
-                                error!("Error Requesting Signature: {}", e);
-                            }
-                        }
-                    }
-                });
-            } else {
-                error!("Failed to find harvester to send Signatures Request");
-            }
+            let harvester = self.harvester.clone();
+            let shared_state = self.shared_state.clone();
+            let config = self.config.clone();
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let handle = S::load(shared_state, config, harvester.clone(), client).await?;
+                if let Err(e) = harvester.request_signatures(request, handle).await {
+                    error!("Error Requesting Signature: {}", e);
+                }
+                Ok::<(), Error>(())
+            });
             Ok(())
         } else {
             error!("Do not have quality {}", &request.quality_string);

@@ -1,31 +1,29 @@
-use crate::cli::utils::get_ssl_root_path;
+use crate::PROTOCOL_VERSION;
+use crate::cli::utils::{get_ssl_root_path, load_client_id};
 use crate::farmer::config::Config;
 use crate::farmer::protocols::fullnode::new_signage_point::NewSignagePointHandle;
 use crate::farmer::protocols::fullnode::request_signed_values::RequestSignedValuesHandle;
-use crate::gui::FullNodeState;
-use crate::harvesters::{load_harvesters, Harvesters};
-use crate::metrics::Metrics;
-use crate::PROTOCOL_VERSION;
-use dg_xch_clients::api::pool::PoolClient;
-use dg_xch_clients::websocket::farmer::FarmerClient;
-use dg_xch_clients::websocket::WsClientConfig;
+use crate::harvesters::druid_garden::DruidGardenHarvester;
+use crate::harvesters::{Harvester, ProofHandler, SignatureHandler};
 use dg_xch_clients::ClientSSLConfig;
-use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48, SizedBytes};
+use dg_xch_clients::api::pool::PoolClient;
+use dg_xch_clients::websocket::WsClientConfig;
+use dg_xch_clients::websocket::farmer::FarmerClient;
+use dg_xch_core::blockchain::sized_bytes::{Bytes32, Bytes48};
 use dg_xch_core::consensus::constants::{CONSENSUS_CONSTANTS_MAP, MAINNET};
 use dg_xch_core::protocols::farmer::FarmerSharedState;
 use dg_xch_core::protocols::{ChiaMessageFilter, ChiaMessageHandler, ProtocolMessageTypes};
 use dg_xch_core::ssl::create_all_ssl;
 use dg_xch_pos::plots::disk_plot::DiskPlot;
 use dg_xch_pos::plots::plot_reader::PlotReader;
-use dg_xch_serialize::hash_256;
 use log::{error, info};
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::Error;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::sync::RwLock;
@@ -41,40 +39,7 @@ pub static PRIVATE_CRT: &str = "farmer/private_farmer.crt";
 pub static PRIVATE_KEY: &str = "farmer/private_farmer.key";
 pub static CA_PRIVATE_CRT: &str = "ca/private_ca.crt";
 
-#[derive(Clone, Default)]
-pub struct GuiStats {
-    pub keys: Vec<Bytes48>,
-    pub most_recent_sp: (Bytes32, u8),
-    pub total_plot_count: u64,
-    pub total_plot_space: u64,
-    pub last_pool_update: u64,
-}
-
-#[derive(Clone)]
-pub struct ExtendedFarmerSharedState {
-    pub(crate) config: Arc<Config>,
-    pub(crate) run: Arc<AtomicBool>,
-    pub(crate) force_pool_update: Arc<AtomicBool>,
-    pub(crate) full_node_client: Arc<RwLock<Option<FarmerClient<ExtendedFarmerSharedState>>>>,
-    pub(crate) gui_stats: Arc<RwLock<GuiStats>>,
-    pub(crate) last_sp_timestamp: Arc<RwLock<Instant>>,
-    pub(crate) extended_metrics: Arc<Metrics>,
-    pub(crate) fullnode_state: Arc<RwLock<Option<FullNodeState>>>,
-}
-impl Default for ExtendedFarmerSharedState {
-    fn default() -> Self {
-        Self {
-            config: Arc::new(Default::default()),
-            run: Arc::new(Default::default()),
-            force_pool_update: Arc::new(Default::default()),
-            full_node_client: Arc::new(Default::default()),
-            gui_stats: Arc::new(Default::default()),
-            last_sp_timestamp: Arc::new(RwLock::new(Instant::now())),
-            extended_metrics: Arc::new(Default::default()),
-            fullnode_state: Arc::new(Default::default()),
-        }
-    }
-}
+pub static HARVESTER_CRT: &str = "harvester/private_harvester.crt";
 
 #[derive(Debug, Clone)]
 pub struct PathInfo {
@@ -113,21 +78,46 @@ pub struct PlotInfo {
     pub time_modified: u64,
 }
 
-pub struct Farmer<T: PoolClient + Sized + Sync + Send + 'static> {
-    shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-    harvesters: Arc<HashMap<Bytes32, Arc<Harvesters>>>,
-    pool_client: Arc<T>,
+pub struct Farmer<P, O, S, T = (), H = DruidGardenHarvester<T>, C = ()>
+where
+    P: PoolClient + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
+    shared_state: Arc<FarmerSharedState<T>>,
+    harvester: Arc<H>,
+    pool_client: Arc<P>,
+    full_node_client: Arc<RwLock<Option<FarmerClient<T>>>>,
+    config: Arc<RwLock<Config<C>>>,
+    phantom_proof_handler: PhantomData<O>,
+    phantom_signature_handler: PhantomData<S>,
 }
-impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
+impl<P, O, S, T, H, C> Farmer<P, O, S, T, H, C>
+where
+    P: PoolClient + Default + Sized + Sync + Send + 'static,
+    O: ProofHandler<T, H, C> + Sync + Send + 'static,
+    S: SignatureHandler<T, H, C> + Sync + Send + 'static,
+    T: Sync + Send + 'static,
+    H: Harvester<T, H, C> + Sync + Send + 'static,
+    C: Sync + Send + Clone + 'static,
+{
     pub async fn new(
-        shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
-        pool_client: Arc<T>,
+        shared_state: Arc<FarmerSharedState<T>>,
+        pool_client: Arc<P>,
+        harvester: Arc<H>,
+        config: Arc<RwLock<Config<C>>>,
     ) -> Result<Self, Error> {
-        let harvesters = load_harvesters(shared_state.clone()).await?;
         Ok(Self {
             shared_state,
-            harvesters,
+            harvester,
             pool_client,
+            full_node_client: Default::default(),
+            config,
+            phantom_proof_handler: Default::default(),
+            phantom_signature_handler: Default::default(),
         })
     }
 
@@ -135,19 +125,19 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
         let s = self;
         let mut client_run = Arc::new(AtomicBool::new(true));
         'retry: loop {
-            if !s.shared_state.data.run.load(Ordering::Relaxed) {
+            if !s.shared_state.signal.load(Ordering::Relaxed) {
                 break;
             }
+            let config = s.config.read().await;
             info!(
                 "Starting Farmer FullNode Connection to: {}:{}",
-                &s.shared_state.data.config.fullnode_ws_host,
-                s.shared_state.data.config.fullnode_ws_port
+                &config.fullnode_ws_host, config.fullnode_ws_port
             );
             loop {
-                if !s.shared_state.data.run.load(Ordering::Relaxed) {
+                if !s.shared_state.signal.load(Ordering::Relaxed) {
                     break;
                 }
-                if let Some(client) = s.shared_state.data.full_node_client.read().await.as_ref() {
+                if let Some(client) = &*s.full_node_client.read().await {
                     client_run.store(false, Ordering::Relaxed);
                     client
                         .client
@@ -160,16 +150,31 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                 }
                 client_run = Arc::new(AtomicBool::new(true));
                 match s
-                    .create_farmer_client(s.shared_state.clone(), client_run.clone())
+                    .create_farmer_client(
+                        s.shared_state.clone(),
+                        s.config.clone(),
+                        client_run.clone(),
+                    )
                     .await
                 {
-                    Ok(mut c) => {
-                        if let Err(e) = s.attach_client_handlers(&s.shared_state, &mut c).await {
+                    Ok(c) => {
+                        if let Some(handshake) = &c.client.handshake {
+                            info!(
+                                "Using node with Upstream Version: {}",
+                                handshake.software_version
+                            );
+                        } else {
+                            error!("Failed to read chia version from client handshake");
+                        }
+                        *s.full_node_client.write().await = Some(c);
+                        if let Err(e) = s
+                            .attach_client_handlers(s.full_node_client.clone(), s.config.clone())
+                            .await
+                        {
                             error!("Failed to attach socket listeners: {:?}", e);
                             continue;
                         } else {
                             info!("Farmer Client Initialized");
-                            *s.shared_state.data.full_node_client.write().await = Some(c);
                             break;
                         }
                     }
@@ -185,9 +190,9 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
             }
             let mut last_clear = Instant::now();
             loop {
-                if let Some(client) = s.shared_state.data.full_node_client.read().await.as_ref() {
+                if let Some(client) = s.full_node_client.read().await.as_ref() {
                     if client.is_closed() {
-                        if !s.shared_state.data.run.load(Ordering::Relaxed) {
+                        if !s.shared_state.signal.load(Ordering::Relaxed) {
                             info!("Farmer Stopped");
                             break 'retry;
                         } else {
@@ -197,18 +202,17 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                     }
                 }
                 let dur = Instant::now()
-                    .duration_since(*s.shared_state.data.last_sp_timestamp.read().await)
+                    .duration_since(*s.shared_state.last_sp_timestamp.read().await)
                     .as_secs();
                 if dur >= 60 {
                     info!(
                         "Failed to get Signage Point after {dur} seconds, restarting farmer client"
                     );
-                    *s.shared_state.data.last_sp_timestamp.write().await = Instant::now();
-                    if let Some(c) = &*s.shared_state.data.full_node_client.read().await {
+                    *s.shared_state.last_sp_timestamp.write().await = Instant::now();
+                    if let Some(c) = &*s.full_node_client.read().await {
                         info!(
                             "Shutting Down old Farmer Client: {}:{}",
-                            s.shared_state.data.config.fullnode_ws_host,
-                            s.shared_state.data.config.fullnode_ws_host
+                            &config.fullnode_ws_host, config.fullnode_ws_port
                         );
                         client_run.store(false, Ordering::Relaxed);
                         c.client
@@ -258,7 +262,7 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
                         .retain(|k, _| !expired.contains(k));
                     last_clear = Instant::now();
                 }
-                if !s.shared_state.data.run.load(Ordering::Relaxed) {
+                if !s.shared_state.signal.load(Ordering::Relaxed) {
                     info!("Farmer Stopping");
                     break 'retry;
                 }
@@ -269,16 +273,18 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
 
     async fn create_farmer_client(
         &self,
-        shared_state: Arc<FarmerSharedState<ExtendedFarmerSharedState>>,
+        shared_state: Arc<FarmerSharedState<T>>,
+        config: Arc<RwLock<Config<C>>>,
         client_run: Arc<AtomicBool>,
-    ) -> Result<FarmerClient<ExtendedFarmerSharedState>, Error> {
-        let network_id = shared_state.data.config.selected_network.clone();
-        let ssl_path = get_ssl_root_path(shared_state.as_ref());
+    ) -> Result<FarmerClient<T>, Error> {
+        let config = config.read().await;
+        let network_id = config.selected_network.clone();
+        let ssl_path = get_ssl_root_path(&*config);
         create_all_ssl(&ssl_path, false)?;
         FarmerClient::new(
             Arc::new(WsClientConfig {
-                host: shared_state.data.config.fullnode_ws_host.clone(),
-                port: shared_state.data.config.fullnode_ws_port,
+                host: config.fullnode_ws_host.clone(),
+                port: config.fullnode_ws_port,
                 network_id,
                 ssl_info: Some(ClientSSLConfig {
                     ssl_crt_path: ssl_path.join(PUBLIC_CRT).to_string_lossy().to_string(),
@@ -297,81 +303,97 @@ impl<T: PoolClient + Sized + Sync + Send> Farmer<T> {
 
     async fn attach_client_handlers(
         &self,
-        shared_state: &FarmerSharedState<ExtendedFarmerSharedState>,
-        client: &mut FarmerClient<ExtendedFarmerSharedState>,
+        client: Arc<RwLock<Option<FarmerClient<T>>>>,
+        config: Arc<RwLock<Config<C>>>,
     ) -> Result<(), Error> {
-        client.client.connection.write().await.clear().await;
+        if let Some(c) = &*client.read().await {
+            c.client.connection.write().await.clear().await;
+        }
         let signage_handle_id = Uuid::new_v4();
-        let harvester_id = load_client_id(shared_state).await?;
-        client
-            .client
-            .connection
-            .write()
-            .await
-            .subscribe(
-                signage_handle_id,
-                ChiaMessageHandler::new(
-                    NEW_SIGNAGE_POINT_FILTER.clone(),
-                    Arc::new(NewSignagePointHandle {
-                        id: signage_handle_id,
-                        harvester_id,
-                        shared_state: self.shared_state.clone(),
-                        pool_state: self.shared_state.pool_states.clone(),
-                        pool_client: self.pool_client.clone(),
-                        signage_points: self.shared_state.signage_points.clone(),
-                        cache_time: self.shared_state.cache_time.clone(),
-                        harvesters: self.harvesters.clone(),
-                        constants: CONSENSUS_CONSTANTS_MAP
-                            .get(&self.shared_state.data.config.selected_network)
-                            .unwrap_or(&MAINNET),
-                    }),
-                ),
-            )
-            .await;
         let request_signed_values_id = Uuid::new_v4();
-        client
-            .client
-            .connection
-            .write()
-            .await
-            .subscribe(
-                request_signed_values_id,
-                ChiaMessageHandler::new(
-                    SIGNED_VALUES_FILTER.clone(),
-                    Arc::new(RequestSignedValuesHandle {
-                        id: request_signed_values_id,
-                        shared_state: self.shared_state.clone(),
-                        pool_client: self.pool_client.clone(),
-                        harvesters: self.harvesters.clone(),
-                        constants: CONSENSUS_CONSTANTS_MAP
-                            .get(&self.shared_state.data.config.selected_network)
-                            .unwrap_or(&MAINNET),
-                    }),
-                ),
-            )
-            .await;
+        let harvester_id = load_client_id(config.clone()).await?;
+        let proof_handle = O::load(
+            self.shared_state.clone(),
+            config.clone(),
+            self.harvester.clone(),
+            client.clone(),
+        )
+        .await?;
+        let signature_handle = S::load(
+            self.shared_state.clone(),
+            config.clone(),
+            self.harvester.clone(),
+            client.clone(),
+        )
+        .await?;
+        let config = config.read().await;
+        let inner_client = client.clone();
+        if let Some(c) = &*client.read().await {
+            c.client
+                .connection
+                .write()
+                .await
+                .subscribe(
+                    signage_handle_id,
+                    Arc::new(ChiaMessageHandler::new(
+                        NEW_SIGNAGE_POINT_FILTER.clone(),
+                        Arc::new(NewSignagePointHandle {
+                            id: signage_handle_id,
+                            harvester_id,
+                            shared_state: self.shared_state.clone(),
+                            pool_state: self.shared_state.pool_states.clone(),
+                            pool_client: self.pool_client.clone(),
+                            signage_points: self.shared_state.signage_points.clone(),
+                            cache_time: self.shared_state.cache_time.clone(),
+                            harvester: self.harvester.clone(),
+                            constants: CONSENSUS_CONSTANTS_MAP
+                                .get(&config.selected_network)
+                                .unwrap_or(&MAINNET),
+                            client: inner_client.clone(),
+                            config: self.config.clone(),
+                            proof_handle,
+                        }),
+                    )),
+                )
+                .await;
+            c.client
+                .connection
+                .write()
+                .await
+                .subscribe(
+                    request_signed_values_id,
+                    Arc::new(ChiaMessageHandler::new(
+                        SIGNED_VALUES_FILTER.clone(),
+                        Arc::new(RequestSignedValuesHandle {
+                            id: request_signed_values_id,
+                            shared_state: self.shared_state.clone(),
+                            pool_client: self.pool_client.clone(),
+                            harvester: self.harvester.clone(),
+                            constants: CONSENSUS_CONSTANTS_MAP
+                                .get(&config.selected_network)
+                                .unwrap_or(&MAINNET),
+                            client: inner_client.clone(),
+                            config: self.config.clone(),
+                            signature_handle,
+                        }),
+                    )),
+                )
+                .await;
+        }
         Ok(())
     }
 }
-
-static HARVESTER_CRT: &str = "harvester/private_harvester.crt";
 static NEW_SIGNAGE_POINT_FILTER: Lazy<Arc<ChiaMessageFilter>> = Lazy::new(|| {
     Arc::new(ChiaMessageFilter {
         msg_type: Some(ProtocolMessageTypes::NewSignagePoint),
         id: None,
+        custom_fn: None,
     })
 });
 static SIGNED_VALUES_FILTER: Lazy<Arc<ChiaMessageFilter>> = Lazy::new(|| {
     Arc::new(ChiaMessageFilter {
         msg_type: Some(ProtocolMessageTypes::RequestSignedValues),
         id: None,
+        custom_fn: None,
     })
 });
-
-async fn load_client_id(
-    shared_state: &FarmerSharedState<ExtendedFarmerSharedState>,
-) -> Result<Bytes32, Error> {
-    let ssl_path = get_ssl_root_path(shared_state).join(Path::new(HARVESTER_CRT));
-    let cert = tokio::fs::read_to_string(ssl_path).await?;
-    Ok(Bytes32::new(&hash_256(cert)))
-}
