@@ -248,8 +248,10 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
     config.harvester_configs.druid_garden = Some(DruidGardenHarvesterConfig {
         plot_directories: if let Some(dirs) = gen_settings.plot_directories {
             dirs
-        } else {
+        } else if use_prompts {
             prompt_for_plot_directories()?
+        } else {
+            vec![]
         },
     });
     if let Some(ssl_path) = &config.ssl_root_path {
