@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "dg_fast_farmer"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "async-trait",
  "bip39",
@@ -750,6 +750,8 @@ dependencies = [
 [[package]]
 name = "dg_logger"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0a411d30991d28918df58341f3f486d97b8f62ccc6dc875894a1c14ae605171"
 dependencies = [
  "colored",
  "log",
@@ -762,6 +764,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_cli"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70712678c19ed5b1e81740a10e86c65f9cc7a4cd4968632cc4f0a23d3e5dcf8b"
 dependencies = [
  "async-trait",
  "bip39",
@@ -788,6 +792,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_clients"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4a30fed4f0d518e17bc9a352b389d322cfe102b76ee0d0ac01c22cb401065f5"
 dependencies = [
  "async-trait",
  "blst",
@@ -812,6 +818,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_core"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0789333d848e8d0bdf5525dc8281fee50ef27ee053e78c7b4b82fe0178e69a2"
 dependencies = [
  "async-trait",
  "bls12_381",
@@ -852,6 +860,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_keys"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b1ac1d358fdeb4fca93b130b0036811ed2990207ee957302b0b33fd388d122"
 dependencies = [
  "bech32",
  "bip39",
@@ -866,6 +876,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_macros"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92da53a098f638124cacda3d08b4f7960e1b4197170c2afd76eecf4c030cbcff"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -875,6 +887,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_pos"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9de89548f0152e4c10cae5b0dabed7099aa85de0fe210d26ad6d8682af26d178"
 dependencies = [
  "async-trait",
  "blake3",
@@ -898,6 +912,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_puzzles"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "121b1cba42e51f6f9657b6220eeb178a6e5dba840edc1e53405ce1e2b7a93be1"
 dependencies = [
  "blst",
  "dg_xch_core",
@@ -913,6 +929,8 @@ dependencies = [
 [[package]]
 name = "dg_xch_serialize"
 version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ef529e52f99c9ca999c60a7952a1a954e621888c906f968f762741ffbdef798"
 dependencies = [
  "log",
  "serde",
