@@ -294,9 +294,9 @@ fn ui(
              \t  Most Recent Signage Point: \n    {:#?} ({:#?})",
             plot_counts.og_plot_count.load(Ordering::Relaxed)
                 + plot_counts.nft_plot_count.load(Ordering::Relaxed)
-                + plot_counts.compresses_plot_count.load(Ordering::Relaxed),
+                + plot_counts.compressed_plot_count.load(Ordering::Relaxed),
             bytefmt::format_to(
-                plot_counts.total_plot_space.load(Ordering::Relaxed),
+                plot_counts.total_plot_space.load(Ordering::Relaxed) as u64,
                 bytefmt::Unit::TIB
             ),
             plot_counts.total_plot_space.load(Ordering::Relaxed),

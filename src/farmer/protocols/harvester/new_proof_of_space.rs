@@ -457,8 +457,7 @@ impl<
         _harvester: Arc<H>,
         _client: Arc<RwLock<Option<FarmerClient<T>>>>,
     ) -> Result<Arc<Self>, Error> {
-        Err(Error::new(
-            ErrorKind::Other,
+        Err(Error::other(
             "Do not Create Partial Handler with Load. Create it Directly with PartialHandler { .. }",
         ))
     }

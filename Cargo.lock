@@ -731,12 +731,12 @@ dependencies = [
  "home",
  "log",
  "once_cell",
- "portfu",
+ "portfu 1.2.0",
  "prometheus",
  "rand 0.8.5",
  "ratatui",
  "regex",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "serde",
  "serde_yaml",
  "sysinfo",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "dg_logger"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "colored",
  "log",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_cli"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "bip39",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_clients"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "blst",
@@ -800,7 +800,7 @@ dependencies = [
  "log",
  "prometheus",
  "reqwest",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "serde",
  "serde_json",
  "tokio",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_core"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "bls12_381",
@@ -832,11 +832,12 @@ dependencies = [
  "num-traits",
  "once_cell",
  "parking_lot",
+ "portfu 1.3.0",
  "prometheus",
  "rand 0.8.5",
  "regex",
  "rsa",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "rustls-pemfile",
  "secrecy",
  "serde",
@@ -850,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_keys"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "bech32",
  "bip39",
@@ -864,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_macros"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -873,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_pos"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "blake3",
@@ -896,7 +897,7 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_puzzles"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "blst",
  "dg_xch_core",
@@ -911,10 +912,11 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_serialize"
-version = "2.0.3"
+version = "2.1.2"
 dependencies = [
  "log",
  "serde",
+ "time",
 ]
 
 [[package]]
@@ -1358,7 +1360,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-util",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.2",
@@ -2070,16 +2072,47 @@ dependencies = [
  "hyper-util",
  "log",
  "once_cell",
- "portfu_core",
- "portfu_macros",
+ "portfu_core 1.2.0",
+ "portfu_macros 1.2.0",
  "prometheus",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
  "tokio-rustls 0.26.2",
  "tokio-tungstenite 0.21.0",
+ "uuid",
+ "webpki-roots",
+]
+
+[[package]]
+name = "portfu"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02b5b9e5bfa33ef8f11d2508629cc6eb1da8fd3e2250b2fb37a9a8f2dcecbbf0"
+dependencies = [
+ "async-trait",
+ "cookie",
+ "dashmap 5.5.3",
+ "futures-util",
+ "hex",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "once_cell",
+ "portfu_core 1.3.0",
+ "portfu_macros 1.3.0",
+ "prometheus",
+ "rustls 0.23.27",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-rustls 0.26.2",
+ "tokio-tungstenite 0.26.2",
  "uuid",
  "webpki-roots",
 ]
@@ -2104,7 +2137,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rsa",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "rustls-pemfile",
  "serde",
  "serde_html_form",
@@ -2119,6 +2152,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "portfu_core"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4014a6f58450a016dcf1fee666500a0141becc9a553764be57499ed7283f162a"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "mime_guess",
+ "notify",
+ "once_cell",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "rsa",
+ "rustls 0.23.27",
+ "rustls-pemfile",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-rustls 0.26.2",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
+ "urlencoding",
+ "uuid",
+ "x509-cert",
+]
+
+[[package]]
 name = "portfu_macros"
 version = "1.2.0"
 source = "git+https://github.com/GalactechsLLC/portfu.git?branch=pf_admin_updates#17813a4160f3e42166f2145b5307b177d28d225e"
@@ -2128,7 +2197,26 @@ dependencies = [
  "http-body-util",
  "hyper",
  "mime_guess",
- "portfu_core",
+ "portfu_core 1.2.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.100",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "portfu_macros"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "823543a13ad145e0178dbd9cb36079ca4f0f05df7ea20eb4b45b05a14f9f1d61"
+dependencies = [
+ "async-trait",
+ "http",
+ "http-body-util",
+ "hyper",
+ "mime_guess",
+ "portfu_core 1.3.0",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -2203,7 +2291,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash 2.1.1",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "socket2",
  "thiserror 2.0.12",
  "tokio",
@@ -2222,7 +2310,7 @@ dependencies = [
  "rand 0.9.0",
  "ring",
  "rustc-hash 2.1.1",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.12",
@@ -2429,7 +2517,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "rustls-pemfile",
  "rustls-pki-types",
  "serde",
@@ -2545,16 +2633,16 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.26"
+version = "0.23.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df51b5869f3a441595eac5e8ff14d486ff285f7b8c0df8770e49c3b56351f0f0"
+checksum = "730944ca083c1c233a75c09f199e973ca499344a2b7ba9e755c457e86fb4a321"
 dependencies = [
  "aws-lc-rs",
  "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.1",
+ "rustls-webpki 0.103.3",
  "subtle",
  "zeroize",
 ]
@@ -2590,9 +2678,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.1"
+version = "0.103.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fef8b8769aaccf73098557a87cd1816b4f9c7c16811c9c77142aa695c16f2c03"
+checksum = "e4a72fe2bcf7a6ac6fd7d0b9e5cb68aeb7d4c0a0271730218b3e92d43b4eb435"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -3115,7 +3203,7 @@ version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e727b36a1a0e8b74c376ac2211e40c2c8af09fb4013c60d910495810f008e9b"
 dependencies = [
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "tokio",
 ]
 
@@ -3143,7 +3231,7 @@ checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
 dependencies = [
  "futures-util",
  "log",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.2",
@@ -3264,7 +3352,7 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.0",
- "rustls 0.23.26",
+ "rustls 0.23.27",
  "rustls-pki-types",
  "sha1",
  "thiserror 2.0.12",
