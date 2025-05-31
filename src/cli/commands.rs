@@ -132,6 +132,7 @@ where
                 .register(metrics::<T>::default())
                 .register(farmer_stats::<T>::default())
                 .register(farmer_state::<T>::default())
+                .register(farmer_stats::<T>::default())
                 .register(log_stream {
                     peers: Default::default(),
                 })
@@ -172,9 +173,8 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
     use_prompts: bool,
 ) -> Result<Config<C>, Error> {
     if let Some(op) = &gen_settings.output_path {
-        if use_prompts
-            && op.exists()
-            && !Confirm::new()
+        if use_prompts && op.exists() {
+            let user_confirm = !Confirm::new()
                 .with_prompt(format!(
                     "An existing config exists at {:?}, would you like to override it? (Y/N)",
                     op
@@ -185,9 +185,10 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
                         ErrorKind::Interrupted,
                         format!("Dialog Interrupted: {:?}", e),
                     )
-                })?
-        {
-            return Err(Error::new(ErrorKind::Interrupted, "User Canceled"));
+                })?;
+            if !user_confirm {
+                return Err(Error::new(ErrorKind::Interrupted, "User Canceled"));
+            }
         }
     }
     let mut config = Config::default();
