@@ -13,7 +13,6 @@ use std::io::{Error, ErrorKind};
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use time::OffsetDateTime;
 
 #[get("/metrics")]
 pub async fn metrics<T: Sync + Send + 'static>(
@@ -119,7 +118,7 @@ pub async fn farmer_stats<T: Sync + Send + 'static>(
                     .as_ref()
                     .map(|v| v.sync.synced)
                     .unwrap_or_default(),
-                gathered: OffsetDateTime::now_utc(),
+                gathered: v.timestamp,
             });
         }
     }

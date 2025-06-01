@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "dg_fast_farmer"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "async-trait",
  "bip39",
