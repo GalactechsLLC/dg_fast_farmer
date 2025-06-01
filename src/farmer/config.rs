@@ -6,7 +6,7 @@ use dg_xch_keys::parse_payout_address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::path::{Path, PathBuf};
 
 const fn default_true() -> bool {
@@ -80,8 +80,7 @@ impl<C: Clone + Serialize> Config<C> {
     pub fn save_as_yaml<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
         fs::write(
             path.as_ref(),
-            serde_yaml::to_string(&self)
-                .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?,
+            serde_yaml::to_string(&self).map_err(|e| Error::other(format!("{:?}", e)))?,
         )
     }
     pub fn is_ready(&self) -> bool {
@@ -139,7 +138,7 @@ impl<C: for<'a> Deserialize<'a> + Clone> TryFrom<&Path> for Config<C> {
     type Error = Error;
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
         serde_yaml::from_str::<Config<C>>(&fs::read_to_string(value)?)
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))
+            .map_err(|e| Error::other(format!("{:?}", e)))
     }
 }
 impl<C: for<'a> Deserialize<'a> + Clone> TryFrom<&PathBuf> for Config<C> {

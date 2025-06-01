@@ -130,6 +130,7 @@ where
                 .shared_state::<FarmerSharedState<T>>(shared_state)
                 .shared_state::<DruidGardenLogger>(logger)
                 .register(metrics::<T>::default())
+                .register(farmer_stats::<T>::default())
                 .register(farmer_state::<T>::default())
                 .register(farmer_stats::<T>::default())
                 .register(log_stream {
@@ -248,10 +249,8 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
     config.harvester_configs.druid_garden = Some(DruidGardenHarvesterConfig {
         plot_directories: if let Some(dirs) = gen_settings.plot_directories {
             dirs
-        } else if use_prompts {
-            prompt_for_plot_directories()?
         } else {
-            vec![]
+            prompt_for_plot_directories()?
         },
     });
     if let Some(ssl_path) = &config.ssl_root_path {

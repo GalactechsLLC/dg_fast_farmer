@@ -1,7 +1,6 @@
 use dg_logger::DruidGardenLogger;
 use dg_xch_core::blockchain::blockchain_state::BlockchainState;
-use dg_xch_core::blockchain::sized_bytes::Bytes32;
-use dg_xch_core::protocols::farmer::{FarmerSharedState, FarmerStats, PlotCounts};
+use dg_xch_core::protocols::farmer::{FarmerSharedState, FarmerStats, SerialPlotCounts};
 use log::{Level, debug, error, info};
 use portfu::macros::{get, websocket};
 use portfu::prelude::http::HeaderValue;
@@ -10,16 +9,14 @@ use portfu::prelude::tokio_tungstenite::tungstenite::Message;
 use portfu::prelude::*;
 use prometheus::TextEncoder;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 #[get("/metrics")]
 pub async fn metrics<T: Sync + Send + 'static>(
-    state: State<Arc<FarmerSharedState<T>>>,
+    state: State<FarmerSharedState<T>>,
     data: &mut ServiceData,
 ) -> Result<String, Error> {
     if let Some(farmer_metrics) = state.0.metrics.read().await.as_ref() {
@@ -45,49 +42,6 @@ pub async fn metrics<T: Sync + Send + 'static>(
             })
     } else {
         Err(Error::new(ErrorKind::NotFound, "No routes were created"))
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct SerialPlotCounts {
-    pub og_plot_count: u64,
-    pub nft_plot_count: u64,
-    pub compresses_plot_count: u64,
-    pub invalid_plot_count: u64,
-    pub total_plot_space: u64,
-}
-impl From<&PlotCounts> for SerialPlotCounts {
-    fn from(counts: &PlotCounts) -> Self {
-        Self {
-            og_plot_count: counts.og_plot_count.load(Ordering::Relaxed),
-            nft_plot_count: counts.nft_plot_count.load(Ordering::Relaxed),
-            compresses_plot_count: counts.compresses_plot_count.load(Ordering::Relaxed),
-            invalid_plot_count: counts.invalid_plot_count.load(Ordering::Relaxed),
-            total_plot_space: counts.total_plot_space.load(Ordering::Relaxed),
-        }
-    }
-}
-
-use crate::harvesters::druid_garden::PlotCounts as HarvesterPlotCounts;
-#[derive(Serialize, Deserialize)]
-pub struct SerialHarvesterPlotCounts {
-    pub og_passed: u64,
-    pub og_total: u64,
-    pub pool_total: u64,
-    pub pool_passed: u64,
-    pub compressed_passed: u64,
-    pub compressed_total: u64,
-}
-impl From<&HarvesterPlotCounts> for SerialHarvesterPlotCounts {
-    fn from(counts: &HarvesterPlotCounts) -> Self {
-        Self {
-            og_passed: counts.og_passed.load(Ordering::Relaxed),
-            og_total: counts.og_total.load(Ordering::Relaxed),
-            pool_total: counts.pool_total.load(Ordering::Relaxed),
-            pool_passed: counts.pool_passed.load(Ordering::Relaxed),
-            compressed_passed: counts.compressed_passed.load(Ordering::Relaxed),
-            compressed_total: counts.compressed_total.load(Ordering::Relaxed),
-        }
     }
 }
 
@@ -118,8 +72,57 @@ pub async fn farmer_state<T: Sync + Send + 'static>(
 #[get("/stats", output = "json", eoutput = "bytes")]
 pub async fn farmer_stats<T: Sync + Send + 'static>(
     state: State<FarmerSharedState<T>>,
-) -> Result<HashMap<(Bytes32, Bytes32), FarmerStats>, Error> {
-    Ok(state.0.recent_stats.read().await.clone())
+) -> Result<Vec<FarmerStats>, Error> {
+    let mut data = Vec::default();
+    let lock = state.0.recent_plot_stats.read().await;
+    for val in lock.keys().iter().zip(lock.values()) {
+        if let (Some(k), Some(v)) = val {
+            data.push(FarmerStats {
+                challenge_hash: k.1,
+                sp_hash: k.0,
+                running: true,
+                og_passed_filter: v.og_passed,
+                og_plot_count: v.og_total,
+                nft_passed_filter: v.pool_passed,
+                nft_plot_count: v.pool_total,
+                compressed_passed_filter: v.compressed_passed,
+                compressed_plot_count: v.compressed_total,
+                invalid_plot_count: state
+                    .0
+                    .plot_counts
+                    .invalid_plot_count
+                    .load(Ordering::Relaxed),
+                proofs_found: v.proofs_found,
+                total_plot_space: state.0.plot_counts.total_plot_space.load(Ordering::Relaxed),
+                full_node_height: state
+                    .0
+                    .fullnode_state
+                    .read()
+                    .await
+                    .as_ref()
+                    .map(|v| v.peak.as_ref().map(|v| v.height as i64).unwrap_or_default())
+                    .unwrap_or_default(),
+                full_node_difficulty: state
+                    .0
+                    .fullnode_state
+                    .read()
+                    .await
+                    .as_ref()
+                    .map(|v| v.difficulty)
+                    .unwrap_or_default() as i64,
+                full_node_synced: state
+                    .0
+                    .fullnode_state
+                    .read()
+                    .await
+                    .as_ref()
+                    .map(|v| v.sync.synced)
+                    .unwrap_or_default(),
+                gathered: v.timestamp,
+            });
+        }
+    }
+    Ok(data)
 }
 
 #[websocket("/log_stream/{level}")]

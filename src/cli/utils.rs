@@ -93,7 +93,7 @@ pub fn init_logger() -> Result<Arc<DruidGardenLogger>, Error> {
         .current_level(Level::Info)
         .timestamp_format(TimestampFormat::Local)
         .init()
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(|e| Error::other(format!("{e:?}")))
 }
 
 pub fn check_config(config_path: &Path) -> Result<(), Error> {

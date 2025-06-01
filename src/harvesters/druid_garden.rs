@@ -3,7 +3,6 @@ use crate::cli::utils::load_client_id;
 use crate::farmer::config::Config;
 use crate::farmer::{PathInfo, PlotInfo};
 use crate::harvesters::{FarmingKeys, Harvester, ProofHandler, SignatureHandler, count_plots};
-use crate::routes::SerialHarvesterPlotCounts;
 use async_trait::async_trait;
 use blst::min_pk::{PublicKey, SecretKey};
 use dg_xch_core::blockchain::proof_of_space::{
@@ -16,7 +15,7 @@ use dg_xch_core::consensus::pot_iterations::{
     calculate_iterations_quality, calculate_sp_interval_iters,
 };
 use dg_xch_core::plots::PlotHeader;
-use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState};
+use dg_xch_core::protocols::farmer::{FarmerMetrics, FarmerSharedState, PlotPassCounts};
 use dg_xch_core::protocols::harvester::{
     NewProofOfSpace, NewSignagePointHarvester, RequestSignatures, RespondSignatures,
 };
@@ -30,7 +29,6 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{StreamExt, TryStreamExt};
 use hex::encode;
 use log::{debug, error, info, warn};
-use portfu::pfcore::cache::CircularCache;
 use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind};
@@ -39,18 +37,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::available_parallelism;
 use std::time::{Duration, Instant, SystemTime};
+use time::OffsetDateTime;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::timeout;
-
-#[derive(Default)]
-pub struct PlotCounts {
-    pub og_passed: Arc<AtomicU64>,
-    pub og_total: Arc<AtomicU64>,
-    pub pool_total: Arc<AtomicU64>,
-    pub pool_passed: Arc<AtomicU64>,
-    pub compressed_passed: Arc<AtomicU64>,
-    pub compressed_total: Arc<AtomicU64>,
-}
 
 pub struct DruidGardenHarvester<T: Send + Sync + 'static> {
     pub plots: Arc<Mutex<HashMap<PathInfo, Arc<PlotInfo>>>>,
@@ -62,7 +51,6 @@ pub struct DruidGardenHarvester<T: Send + Sync + 'static> {
     pub uuid: Bytes32,
     pub client_id: Bytes32,
     pub shared_state: Arc<FarmerSharedState<T>>,
-    pub recent_plot_stats: Arc<RwLock<CircularCache<Bytes32, SerialHarvesterPlotCounts, 100>>>,
 }
 #[async_trait]
 impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
@@ -136,7 +124,16 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
             .await
             .as_ref()
             .map(|m| m.signage_point_processing_latency.start_timer());
-        let plot_counts = Arc::new(PlotCounts::default());
+        let plot_counts = Arc::new(PlotPassCounts {
+            og_passed: Arc::new(Default::default()),
+            og_total: Arc::new(Default::default()),
+            pool_total: Arc::new(Default::default()),
+            pool_passed: Arc::new(Default::default()),
+            compressed_passed: Arc::new(Default::default()),
+            compressed_total: Arc::new(Default::default()),
+            proofs_found: Arc::new(Default::default()),
+            timestamp: OffsetDateTime::now_utc(),
+        });
         let harvester_point = Arc::new(signage_point);
         let constants = Arc::new(
             CONSENSUS_CONSTANTS_MAP
@@ -294,7 +291,6 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
             }));
             jobs.push(plot_handle);
         });
-        let proofs = AtomicU64::new(0);
         let nft_partials = AtomicU64::new(0);
         let compressed_partials = AtomicU64::new(0);
         while let Some(timeout_result) = jobs.next().await {
@@ -325,7 +321,7 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                                         nft_partials.fetch_add(1, Ordering::Relaxed);
                                     }
                                 } else {
-                                    proofs.fetch_add(1, Ordering::Relaxed);
+                                    plot_counts.proofs_found.fetch_add(1, Ordering::Relaxed);
                                 }
                             }
                         }
@@ -360,7 +356,7 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
             plot_counts.pool_total.load(Ordering::Relaxed),
             plot_counts.compressed_passed.load(Ordering::Relaxed),
             plot_counts.compressed_total.load(Ordering::Relaxed),
-            proofs.load(Ordering::Relaxed),
+            plot_counts.proofs_found.load(Ordering::Relaxed),
             nft_partials.load(Ordering::Relaxed),
             compressed_partials.load(Ordering::Relaxed),
             finished
@@ -371,14 +367,18 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
             .await
             .as_ref()
             .inspect(|m| {
-                m.total_proofs_found.inc_by(proofs.load(Ordering::Relaxed));
+                m.total_proofs_found
+                    .inc_by(plot_counts.proofs_found.load(Ordering::Relaxed));
             });
         self.shared_state
             .metrics
             .read()
             .await
             .as_ref()
-            .inspect(|m| m.last_proofs_found.set(proofs.load(Ordering::Relaxed)));
+            .inspect(|m| {
+                m.last_proofs_found
+                    .set(plot_counts.proofs_found.load(Ordering::Relaxed))
+            });
         let total_partials =
             nft_partials.load(Ordering::Relaxed) + compressed_partials.load(Ordering::Relaxed);
         self.shared_state
@@ -408,10 +408,10 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
             .await
             .as_ref()
             .inspect(|m| m.last_passed_filter.set(total_passed));
-        self.recent_plot_stats
-            .write()
-            .await
-            .insert(harvester_point.challenge_hash, plot_counts.as_ref().into());
+        self.shared_state.recent_plot_stats.write().await.insert(
+            (harvester_point.sp_hash, harvester_point.challenge_hash),
+            plot_counts.as_ref().into(),
+        );
         Ok(())
     }
 
@@ -562,7 +562,6 @@ impl<T: Send + Sync + 'static> DruidGardenHarvester<T> {
             client_id,
             uuid: Bytes32::from(random::<[u8; 32]>()),
             shared_state,
-            recent_plot_stats: Arc::new(Default::default()),
         })
     }
 }

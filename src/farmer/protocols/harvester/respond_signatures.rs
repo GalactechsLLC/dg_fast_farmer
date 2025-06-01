@@ -17,7 +17,7 @@ use dg_xch_core::protocols::farmer::{DeclareProofOfSpace, SignedValues};
 use dg_xch_core::protocols::harvester::RespondSignatures;
 use dg_xch_core::protocols::{ChiaMessage, ProtocolMessageTypes};
 use dg_xch_core::traits::SizedBytes;
-use dg_xch_keys::{decode_puzzle_hash, parse_payout_address};
+use dg_xch_keys::parse_payout_address;
 use dg_xch_pos::verify_and_get_quality_string;
 use dg_xch_serialize::ChiaSerialize;
 use log::{debug, error, info, warn};
@@ -249,8 +249,8 @@ where
                                         {
                                             let pool_target = PoolTarget {
                                                 max_height: 0,
-                                                puzzle_hash: decode_puzzle_hash(
-                                                    &config.payout_address,
+                                                puzzle_hash: Bytes32::from_str(
+                                                    &parse_payout_address(&config.payout_address)?,
                                                 )?,
                                             };
                                             let pool_target_signature =
