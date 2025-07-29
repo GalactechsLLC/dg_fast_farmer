@@ -171,7 +171,7 @@ where
                             .attach_client_handlers(s.full_node_client.clone(), s.config.clone())
                             .await
                         {
-                            error!("Failed to attach socket listeners: {:?}", e);
+                            error!("Failed to attach socket listeners: {e:?}");
                             continue;
                         } else {
                             info!("Farmer Client Initialized");
@@ -179,10 +179,7 @@ where
                         }
                     }
                     Err(e) => {
-                        error!(
-                            "Failed to Start Farmer Client, Waiting and trying again: {:?}",
-                            e
-                        );
+                        error!("Failed to Start Farmer Client, Waiting and trying again: {e:?}");
                         tokio::time::sleep(Duration::from_secs(3)).await;
                         continue;
                     }
@@ -297,6 +294,7 @@ where
             }),
             shared_state.clone(),
             client_run.clone(),
+            30,
         )
         .await
     }

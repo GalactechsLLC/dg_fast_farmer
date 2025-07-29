@@ -77,7 +77,7 @@ pub async fn load_client_id<C: Clone>(config: Arc<RwLock<Config<C>>>) -> Result<
     let cert_chain = load_certs_from_bytes(&cert_bytes)?;
     let cert = cert_chain.first().ok_or(Error::new(
         ErrorKind::NotFound,
-        format!("No Valid Cert found at {:?}", ssl_path),
+        format!("No Valid Cert found at {ssl_path:?}"),
     ))?;
     Ok(Bytes32::new(hash_256(cert)))
 }
@@ -98,10 +98,7 @@ pub fn init_logger() -> Result<Arc<DruidGardenLogger>, Error> {
 
 pub fn check_config(config_path: &Path) -> Result<(), Error> {
     if !config_path.exists() {
-        let error_msg = format!(
-            "Failed to find config at {:?}, please run init",
-            config_path
-        );
+        let error_msg = format!("Failed to find config at {config_path:?}, please run init");
         eprintln!("{error_msg}");
         Err(Error::new(ErrorKind::NotFound, error_msg))
     } else {

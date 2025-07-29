@@ -42,7 +42,7 @@ pub async fn update_blockchain<T, C: Clone>(
                     *farmer_state.fullnode_state.write().await = Some(bc_state);
                 }
                 Err(e) => {
-                    error!("{:?}", e);
+                    error!("{e:?}");
                 }
             }
         }

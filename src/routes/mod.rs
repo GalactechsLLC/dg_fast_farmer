@@ -136,7 +136,7 @@ pub async fn log_stream(
     let level = Level::from_str(level.as_str()).map_err(|e| {
         Error::new(
             ErrorKind::InvalidInput,
-            format!("{} is not a valid Log Level: {e:?}", level),
+            format!("{level} is not a valid Log Level: {e:?}"),
         )
     })?;
     let mut msgs = vec![];

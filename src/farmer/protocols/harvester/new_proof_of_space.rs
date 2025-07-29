@@ -146,7 +146,7 @@ where
                         } else {
                             info!("No Fee applied for challenge {}", sp.challenge_hash,);
                         }
-                        self._handle_proof(sp, &qs, &new_pos).await;
+                        self._handle_proof(sp, &qs, &new_pos).await?;
                     }
                     if let Some(p2_singleton_puzzle_hash) = &new_pos.proof.pool_contract_puzzle_hash
                     {
@@ -156,7 +156,7 @@ where
                         warn!("Not a pooling proof of space");
                     }
                 } else {
-                    warn!("Invalid proof of space {:?}", new_pos);
+                    warn!("Invalid proof of space {new_pos:?}");
                 }
             }
         } else {
@@ -189,7 +189,12 @@ where
     H: Harvester<T, H, C> + Sync + Send + 'static,
     C: Sync + Send + Clone + 'static,
 {
-    async fn _handle_proof(&self, sp: &NewSignagePoint, qs: &Bytes32, new_pos: &NewProofOfSpace) {
+    async fn _handle_proof(
+        &self,
+        sp: &NewSignagePoint,
+        qs: &Bytes32,
+        new_pos: &NewProofOfSpace,
+    ) -> Result<(), Error> {
         match self
             .shared_state
             .proofs_of_space
@@ -247,32 +252,32 @@ where
                         (
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::ChallengeChainVdf,
-                                data: vdf.cc_vdf.to_bytes(PROTOCOL_VERSION),
+                                data: vdf.cc_vdf.to_bytes(PROTOCOL_VERSION)?,
                             },
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::RewardChainVdf,
-                                data: vdf.rc_vdf.to_bytes(PROTOCOL_VERSION),
+                                data: vdf.rc_vdf.to_bytes(PROTOCOL_VERSION)?,
                             },
                         )
                     } else if let Some(sub_slot_data) = sp_data.sub_slot_data.as_ref() {
                         (
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::ChallengeChainSubSlot,
-                                data: sub_slot_data.cc_sub_slot.to_bytes(PROTOCOL_VERSION),
+                                data: sub_slot_data.cc_sub_slot.to_bytes(PROTOCOL_VERSION)?,
                             },
                             SignatureRequestSourceData {
                                 kind: SigningDataKind::RewardChainSubSlot,
-                                data: sub_slot_data.rc_sub_slot.to_bytes(PROTOCOL_VERSION),
+                                data: sub_slot_data.rc_sub_slot.to_bytes(PROTOCOL_VERSION)?,
                             },
                         )
                     } else {
                         error!("Source Signature Did not contain any data, Cannot Sign Proof");
-                        return;
+                        return Ok(());
                     };
                     Some(vec![Some(cc), Some(rc)])
                 } else {
                     error!("Source Signature Data Request But was Null, Cannot Sign Proof");
-                    return;
+                    return Ok(());
                 }
             } else {
                 None
@@ -289,10 +294,11 @@ where
         let harvester = self.harvester.clone();
         tokio::spawn(async move {
             if let Err(e) = harvester.request_signatures(request, sig_handle?).await {
-                error!("Error Requesting Signature: {}", e);
+                error!("Error Requesting Signature: {e}");
             }
             Ok::<(), Error>(())
         });
+        Ok(())
     }
 
     async fn handle_partial(
@@ -349,18 +355,14 @@ where
             )
         } else {
             warn!(
-                "No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this partial to {}.",
-                pool_url
+                "No pool specific difficulty has been set for {p2_singleton_puzzle_hash}, check communication with the pool, skipping this partial to {pool_url}."
             );
             return Ok(());
         };
         let pool_required_iters =
             calculate_sp_interval_iters(self.constants, self.constants.pool_sub_slot_iters)?;
         if required_iters > pool_required_iters {
-            warn!(
-                "Proof of space not good enough for pool {}: {:?} {qs:?}",
-                pool_url, pool_dif
-            );
+            warn!("Proof of space not good enough for pool {pool_url}: {pool_dif:?} {qs:?}");
             return Ok(());
         }
         let auth_token_timeout = if let Some(Some(auth_token_timeout)) = self
@@ -386,14 +388,14 @@ where
             end_of_sub_slot: new_pos.signage_point_index == 0,
             harvester_id: load_client_id::<C>(self.config.clone()).await?,
         };
-        let payload_bytes = hash_256(payload.to_bytes(PROTOCOL_VERSION));
+        let payload_bytes = hash_256(payload.to_bytes(PROTOCOL_VERSION)?);
         let sp_src_data = {
             if new_pos.include_source_signature_data
                 || new_pos.farmer_reward_address_override.is_some()
             {
                 Some(vec![Some(SignatureRequestSourceData {
                     kind: SigningDataKind::Partial,
-                    data: payload.to_bytes(PROTOCOL_VERSION),
+                    data: payload.to_bytes(PROTOCOL_VERSION)?,
                 })])
             } else {
                 None
@@ -421,7 +423,7 @@ where
         let harvester = self.harvester.clone();
         tokio::spawn(async move {
             if let Err(e) = harvester.request_signatures(request, handler).await {
-                error!("Error Requesting Signature: {}", e);
+                error!("Error Requesting Signature: {e}");
             }
         });
         Ok(())
@@ -465,7 +467,7 @@ impl<
     async fn handle_signature(&self, respond_sigs: RespondSignatures) -> Result<(), Error> {
         let response_msg_sig = if let Some(f) = respond_sigs.message_signatures.first() {
             Signature::from_bytes(&f.1.bytes())
-                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{e:?}")))?
         } else {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -474,7 +476,7 @@ impl<
         };
         let mut plot_sig = None;
         let local_pk = PublicKey::from_bytes(&respond_sigs.local_pk.bytes())
-            .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{e:?}")))?;
         for (pk, sk) in self.shared_state.farmer_private_keys.iter() {
             if *pk == respond_sigs.farmer_pk {
                 let agg_pk = generate_plot_public_key(&local_pk, &pk.into(), true)?;
@@ -488,7 +490,7 @@ impl<
                     &[&sig_farmer, &response_msg_sig, &taproot_sig],
                     true,
                 )
-                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{e:?}")))?;
                 if p_sig.to_signature().verify(
                     true,
                     &self.payload_bytes,
@@ -544,7 +546,7 @@ impl<
             if let Some(plot_sig) = plot_sig {
                 let agg_sig =
                     AggregateSignature::aggregate(&[&plot_sig.to_signature(), &auth_sig], true)
-                        .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
+                        .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{e:?}")))?;
                 let post_request = PostPartialRequest {
                     payload: self.payload.clone(),
                     aggregate_signature: agg_sig.to_signature().to_bytes().into(),
@@ -625,7 +627,7 @@ impl<
                         }
                     }
                     Err(e) => {
-                        error!("Error in pooling: {:?}", e);
+                        error!("Error in pooling: {e:?}");
                         if e.error_code == PoolErrorCode::ProofNotGoodEnough as u8 {
                             error!(
                                 "Partial not good enough, forcing pool farmer update to get our current difficulty."

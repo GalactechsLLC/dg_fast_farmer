@@ -113,6 +113,7 @@ where
             sp_hash,
             pool_difficulties,
             filter_prefix_bits,
+            last_tx_height: sp.last_tx_height,
         });
         self.cache_time
             .write()
@@ -145,7 +146,7 @@ where
                 )
                 .await
             {
-                error!("Error Handling Signage Point: {}", e);
+                error!("Error Handling Signage Point: {e}");
             }
             Ok::<(), Error>(())
         });

@@ -68,13 +68,13 @@ where
             if let Some(data) = request.foliage_block_data {
                 foliage_block_data = Some(SignatureRequestSourceData {
                     kind: SigningDataKind::FoliageBlockData,
-                    data: data.to_bytes(PROTOCOL_VERSION),
+                    data: data.to_bytes(PROTOCOL_VERSION)?,
                 });
             }
             if let Some(data) = request.foliage_transaction_block_data {
                 foliage_transaction_block = Some(SignatureRequestSourceData {
                     kind: SigningDataKind::FoliageTransactionBlock,
-                    data: data.to_bytes(PROTOCOL_VERSION),
+                    data: data.to_bytes(PROTOCOL_VERSION)?,
                 });
             }
             let request = RequestSignatures {
@@ -95,7 +95,7 @@ where
             tokio::spawn(async move {
                 let handle = S::load(shared_state, config, harvester.clone(), client).await?;
                 if let Err(e) = harvester.request_signatures(request, handle).await {
-                    error!("Error Requesting Signature: {}", e);
+                    error!("Error Requesting Signature: {e}");
                 }
                 Ok::<(), Error>(())
             });

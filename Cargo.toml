@@ -1,6 +1,6 @@
 [package]
 name = "dg_fast_farmer"
-version = "2.0.2"
+version = "2.1.0"
 edition = "2024"
 authors = ["James Hoerr"]
 description = "A lite farmer for the Chia Blockchain."
@@ -24,14 +24,14 @@ bytefmt = "0.1.7"
 clap = { version = "4.5.30", features = ["derive"] }
 crossterm = "0.28.1"
 dialoguer = "0.11.0"
-dg_xch_cli = { path="./dg_xch_utils/cli", version="2.1.2" }
-dg_xch_clients = { path="./dg_xch_utils/clients", version="2.1.2", features = ["metrics"] }
-dg_xch_core = { path="./dg_xch_utils/core", version = "2.1.2", default-features = false, features = ["metrics"] }
-dg_xch_keys = { path="./dg_xch_utils/keys", version="2.1.2" }
+dg_xch_cli = { path="./dg_xch_utils/cli", version="2.1.3" }
+dg_xch_clients = { path="./dg_xch_utils/clients", version="2.1.5", features = ["metrics"] }
+dg_xch_core = { path="./dg_xch_utils/core", version = "2.1.4", default-features = false, features = ["metrics"] }
+dg_xch_keys = { path="./dg_xch_utils/keys", version="2.1.3" }
 dg_logger = { path="./dg_xch_utils/logging", version="2.1.2" }
-dg_xch_pos = { path="./dg_xch_utils/proof_of_space", version="2.1.2" }
-dg_xch_puzzles = { path="./dg_xch_utils/puzzles", version="2.1.2" }
-dg_xch_serialize = { path="./dg_xch_utils/serialize", version="2.1.2" }
+dg_xch_pos = { path="./dg_xch_utils/proof_of_space", version="2.1.3" }
+dg_xch_puzzles = { path="./dg_xch_utils/puzzles", version="2.1.3" }
+dg_xch_serialize = { path="./dg_xch_utils/serialize", version="2.1.3" }
 futures-util = "0.3.31"
 hex = "0.4.3"
 home = "0.5.11"

@@ -176,15 +176,11 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
         if use_prompts && op.exists() {
             let user_confirm = !Confirm::new()
                 .with_prompt(format!(
-                    "An existing config exists at {:?}, would you like to override it? (Y/N)",
-                    op
+                    "An existing config exists at {op:?}, would you like to override it? (Y/N)"
                 ))
                 .interact()
                 .map_err(|e| {
-                    Error::new(
-                        ErrorKind::Interrupted,
-                        format!("Dialog Interrupted: {:?}", e),
-                    )
+                    Error::new(ErrorKind::Interrupted, format!("Dialog Interrupted: {e:?}"))
                 })?;
             if !user_confirm {
                 return Err(Error::new(ErrorKind::Interrupted, "User Canceled"));
@@ -287,7 +283,7 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
                     master_sk_to_wallet_sk_unhardened(&master_key, index).map_err(|e| {
                         Error::new(
                             ErrorKind::InvalidInput,
-                            format!("Failed to parse Wallet SK: {:?}", e),
+                            format!("Failed to parse Wallet SK: {e:?}"),
                         )
                     })?;
                 let pub_key: Bytes48 = wallet_sk.sk_to_pk().to_bytes().into();
@@ -296,7 +292,7 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
                     master_sk_to_wallet_sk(&master_key, index).map_err(|e| {
                         Error::new(
                             ErrorKind::InvalidInput,
-                            format!("Failed to parse Wallet SK: {:?}", e),
+                            format!("Failed to parse Wallet SK: {e:?}"),
                         )
                     })?;
                 let pub_key: Bytes48 = hardened_wallet_sk.sk_to_pk().to_bytes().into();
@@ -383,10 +379,7 @@ pub async fn update_pool_info<C: Clone>(
         launcher_id: Bytes32,
         last_known_coin_name: Option<Bytes32>,
     ) -> Result<(), Error> {
-        info!(
-            "Fetching current PlotNFT state for launcher id {} ...",
-            launcher_id
-        );
+        info!("Fetching current PlotNFT state for launcher id {launcher_id} ...");
         plot_nfts.extend(
             get_plotnft_by_launcher_id(client.clone(), launcher_id, last_known_coin_name).await?,
         );

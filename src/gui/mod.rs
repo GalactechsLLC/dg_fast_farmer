@@ -134,7 +134,7 @@ pub async fn bootstrap<
             })
             .await;
             let (sys, sys_info) = results.unwrap_or_else(|e| {
-                error!("Error Joining System Loading Thread: {:?}", e);
+                error!("Error Joining System Loading Thread: {e:?}");
                 (System::new(), Default::default())
             });
             *sys_info_gui_state.system_info.lock().await = sys_info;

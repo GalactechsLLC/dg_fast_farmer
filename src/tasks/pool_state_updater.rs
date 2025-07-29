@@ -51,7 +51,7 @@ pub async fn pool_updater<T, C: Clone>(
             )
             .await
             {
-                error!("Error updating Pool State: {}", e);
+                error!("Error updating Pool State: {e}");
                 tokio::time::sleep(Duration::from_secs(10)).await;
             } else {
                 first = false;
@@ -88,7 +88,11 @@ pub async fn get_farmer<T: PoolClient + Sized + Sync + Send>(
         target_puzzle_hash: pool_config.target_puzzle_hash,
         authentication_token,
     }
-    .to_bytes(PROTOCOL_VERSION);
+    .to_bytes(PROTOCOL_VERSION)
+    .map_err(|e| PoolError {
+        error_code: PoolErrorCode::RequestFailed as u8,
+        error_message: format!("Invalid Payload Format: {e}"),
+    })?;
     let to_sign = hash_256(&msg);
     let signature = sign(authentication_sk, &to_sign);
     if !verify_signature(&authentication_sk.sk_to_pk(), &to_sign, &signature) {
@@ -154,13 +158,15 @@ pub async fn post_farmer<T: PoolClient + Sized + Sync + Send>(
         payout_instructions: parse_payout_address(payout_instructions).map_err(|e| PoolError {
             error_code: PoolErrorCode::InvalidPayoutInstructions as u8,
             error_message: format!(
-                "Failed to Parse Payout Instructions: {}, {:?}",
-                payout_instructions, e
+                "Failed to Parse Payout Instructions: {payout_instructions}, {e:?}"
             ),
         })?,
         suggested_difficulty,
     };
-    let to_sign = hash_256(payload.to_bytes(PROTOCOL_VERSION));
+    let to_sign = hash_256(payload.to_bytes(PROTOCOL_VERSION).map_err(|e| PoolError {
+        error_code: PoolErrorCode::RequestFailed as u8,
+        error_message: format!("Invalid Payload Format: {e}"),
+    })?);
     let signature = sign(owner_sk, &to_sign);
     if !verify_signature(&owner_sk.sk_to_pk(), &to_sign, &signature) {
         error!("Farmer POST Failed to Validate Signature");
@@ -205,7 +211,10 @@ pub async fn put_farmer<T: PoolClient + Sized + Sync + Send>(
         payout_instructions: parse_payout_address(payout_instructions).ok(),
         suggested_difficulty,
     };
-    let to_sign = hash_256(payload.to_bytes(PROTOCOL_VERSION));
+    let to_sign = hash_256(payload.to_bytes(PROTOCOL_VERSION).map_err(|e| PoolError {
+        error_code: PoolErrorCode::RequestFailed as u8,
+        error_message: format!("Invalid Payload Format: {e}"),
+    })?);
     let signature = sign(owner_sk, &to_sign);
     if !verify_signature(&owner_sk.sk_to_pk(), &to_sign, &signature) {
         error!("Local Failed to Validate Signature");
@@ -442,7 +451,7 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                             })
                             .next_pool_info_update = Instant::now()
                             + Duration::from_secs(UPDATE_POOL_INFO_FAILURE_RETRY_INTERVAL);
-                        error!("Update Pool Info Error: {:?}", e);
+                        error!("Update Pool Info Error: {e:?}");
                     }
                 }
             } else {
@@ -532,7 +541,7 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                                         );
                                     }
                                     Err(e) => {
-                                        error!("Failed post farmer info. {:?}", e);
+                                        error!("Failed post farmer info. {e:?}");
                                     }
                                 }
                                 match update_pool_farmer_info(
@@ -549,8 +558,7 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                                     Ok(resp) => Some(resp),
                                     Err(e) => {
                                         error!(
-                                            "Failed to update farmer info after POST /farmer. {:?}",
-                                            e
+                                            "Failed to update farmer info after POST /farmer. {e:?}"
                                         );
                                         None
                                     }
@@ -579,7 +587,7 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                                 .await
                                 {
                                     Ok(res) => {
-                                        info!("Farmer Update Response: {:?}", res);
+                                        info!("Farmer Update Response: {res:?}");
                                         update_pool_farmer_info(
                                             pool_states.clone(),
                                             pool_config,
@@ -593,7 +601,7 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                                         .ok()
                                     }
                                     Err(e) => {
-                                        error!("Failed to update farmer auth key. {:?}", e);
+                                        error!("Failed to update farmer auth key. {e:?}");
                                         None
                                     }
                                 }
@@ -604,7 +612,7 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                     };
                     let old_instructions;
                     let payout_instructions_update_required = if let Some(info) = farmer_info {
-                        info!("Farmer Info: {:?}", &info);
+                        info!("Farmer Info: {info:?}");
                         if let (Ok(p1), Ok(p2)) = (
                             parse_payout_address(&config.payout_address.to_ascii_lowercase()),
                             parse_payout_address(&info.payout_instructions.to_ascii_lowercase()),
@@ -656,8 +664,7 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                     if payout_instructions_update_required || difficulty_update_required {
                         if payout_instructions_update_required {
                             info!(
-                                "Updating Payout Address from {} to {}",
-                                old_instructions,
+                                "Updating Payout Address from {old_instructions} to {}",
                                 parse_payout_address(&config.payout_address.to_ascii_lowercase())
                                     .unwrap_or_default(),
                             );
@@ -722,10 +729,10 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                                                 error!("Pool Rejected Updating Difficulty")
                                             }
                                         }
-                                        info!("Farmer Update Response: {:?}", res);
+                                        info!("Farmer Update Response: {res:?}");
                                     }
                                     Err(e) => {
-                                        error!("Failed to update farmer auth key. {:?}", e);
+                                        error!("Failed to update farmer auth key. {e:?}");
                                     }
                                 }
                             }

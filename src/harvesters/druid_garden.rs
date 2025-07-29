@@ -209,12 +209,12 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                             if let Some(p_dif) = data_arc.pool_difficulties.iter().find(|p| {
                                 p.pool_contract_puzzle_hash == *pool_contract_puzzle_hash
                             }) {
-                                debug!("Setting Difficulty for pool: {}", dif);
+                                debug!("Setting Difficulty for pool: {dif}");
                                 dif = p_dif.difficulty;
                                 sub_slot_iters = p_dif.sub_slot_iters;
                                 is_partial = true;
                             } else if memo.pool_contract_puzzle_hash.is_some() {
-                                warn!("Failed to find Pool Contract Difficulties for PH: {} ", pool_contract_puzzle_hash);
+                                warn!("Failed to find Pool Contract Difficulties for PH: {pool_contract_puzzle_hash} ");
                             }
                         }
                         for (index, quality) in qualities.into_iter() {
@@ -251,7 +251,7 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                                                 "File: {:?} Plot ID: {}, challenge: {sp_challenge_hash}, Quality Str: {}, proof_xs: {}",
                                                 path,
                                                 &plot_id,
-                                                encode(quality.to_bytes(PROTOCOL_VERSION)),
+                                                encode(quality.to_bytes(PROTOCOL_VERSION)?),
                                                 encode(&proof_bytes)
                                             );
                                             responses.push((
@@ -271,7 +271,7 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                                             ));
                                         }
                                         Err(e) => {
-                                            error!("Failed to read Proof: {:?}", e);
+                                            error!("Failed to read Proof: {e:?}");
                                         }
                                     }
                                     if let Some(start) = start {
@@ -279,8 +279,7 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                                     }
                                 } else {
                                     debug!(
-                                        "Not Enough Iterations: {} > {}",
-                                        required_iters, sp_interval_iters
+                                        "Not Enough Iterations: {required_iters} > {sp_interval_iters}"
                                     );
                                 }
                             }
@@ -303,8 +302,9 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                                     .handle_proof(NewProofOfSpace {
                                         challenge_hash: harvester_point.challenge_hash,
                                         sp_hash: harvester_point.sp_hash,
-                                        plot_identifier: encode(quality.to_bytes(PROTOCOL_VERSION))
-                                            + path.file_name.as_str(),
+                                        plot_identifier: encode(
+                                            quality.to_bytes(PROTOCOL_VERSION)?,
+                                        ) + path.file_name.as_str(),
                                         proof,
                                         signage_point_index: harvester_point.signage_point_index,
                                         include_source_signature_data: false,
@@ -313,7 +313,7 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                                     })
                                     .await
                                 {
-                                    error!("Failed to send proof to handler: {:?}", e);
+                                    error!("Failed to send proof to handler: {e:?}");
                                 } else if is_partial {
                                     if c_level > 0 {
                                         compressed_partials.fetch_add(1, Ordering::Relaxed);
@@ -326,15 +326,15 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                             }
                         }
                         Err(e) => {
-                            debug!("Failed to read plot: {:?}", e);
+                            debug!("Failed to read plot: {e:?}");
                         }
                     },
                     Err(e) => {
-                        error!("Failed to join reader thread: {:?}", e);
+                        error!("Failed to join reader thread: {e:?}");
                     }
                 },
                 Err(e) => {
-                    error!("Failed to read qualities due to Timeout: {:?}", e);
+                    error!("Failed to read qualities due to Timeout: {e:?}");
                 }
             }
         }
@@ -429,10 +429,10 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
             file_name: file_name.to_string(),
         }) {
             None => {
-                error!("Failed to find plot info for plot: {}", file_name);
+                error!("Failed to find plot info for plot: {file_name}");
                 return Err(Error::new(
                     ErrorKind::NotFound,
-                    format!("Failed to find plot info for plot: {}", file_name),
+                    format!("Failed to find plot info for plot: {file_name}"),
                 ));
             }
             Some(info) => match info.reader.header() {
@@ -442,20 +442,19 @@ impl<T: Send + Sync + 'static, C: Send + Sync + Clone + 'static>
                     return Err(Error::new(
                         ErrorKind::InvalidInput,
                         format!(
-                            "To Farm Gigahorse Plots you need to enable the Gigahorse Harvester: {}",
-                            file_name
+                            "To Farm Gigahorse Plots you need to enable the Gigahorse Harvester: {file_name}"
                         ),
                     ));
                 }
             },
         };
         let local_master_secret = SecretKey::from_bytes(memo.local_master_secret_key.as_ref())
-            .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?;
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{e:?}")))?;
         let local_sk = master_sk_to_local_sk(&local_master_secret)?;
         let agg_pk = generate_plot_public_key(
             &local_sk.sk_to_pk(),
             &PublicKey::from_bytes(memo.farmer_public_key.as_ref())
-                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{:?}", e)))?,
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{e:?}")))?,
             memo.pool_contract_puzzle_hash.is_some(),
         )?;
         let mut message_signatures = vec![];
@@ -545,7 +544,7 @@ impl<T: Send + Sync + 'static> DruidGardenHarvester<T> {
                             last_sync = Instant::now();
                         }
                         Err(e) => {
-                            error!("Failed to load plots: {:?}", e);
+                            error!("Failed to load plots: {e:?}");
                         }
                     }
                 }
@@ -580,10 +579,7 @@ async fn load_plots(
         error!("No Public Keys Available");
         return Err(Error::new(
             ErrorKind::NotFound,
-            format!(
-                "Keys not available: {:?}, {:?}",
-                farmer_public_keys, pool_public_keys
-            ),
+            format!("Keys not available: {farmer_public_keys:?}, {pool_public_keys:?}"),
         ));
     }
     let farmer_public_keys = Arc::new(farmer_public_keys.to_vec());
@@ -637,7 +633,7 @@ async fn load_plots(
                             {
                                 Ok(headers) => headers,
                                 Err(e) => {
-                                    error!("Error for Plot: {:?}, {:?}", path, e);
+                                    error!("Error for Plot: {path:?}, {e:?}");
                                     missing_keys.insert(path);
                                     continue;
                                 }
@@ -677,7 +673,7 @@ async fn load_plots(
                                     {
                                         Ok(key) => key,
                                         Err(e) => {
-                                            error!("Failed to load local secret key: {:?}", e);
+                                            error!("Failed to load local secret key: {e:?}");
                                             results.push(Err(path));
                                             continue;
                                         }
@@ -719,13 +715,13 @@ async fn load_plots(
                                             }
                                         }
                                         Err(e) => {
-                                            error!("Failed to create plot public key: {:?}", e);
+                                            error!("Failed to create plot public key: {e:?}");
                                             results.push(Err(path));
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to create disk prover: {:?}", e);
+                                    error!("Failed to create disk prover: {e:?}");
                                     results.push(Err(path));
                                 }
                             }
@@ -733,7 +729,7 @@ async fn load_plots(
                         Some((results, failed, missing_keys))
                     }
                     Err(e) => {
-                        error!("Failed to validate plot dir: {:?}, {:?}", dir, e);
+                        error!("Failed to validate plot dir: {dir:?}, {e:?}");
                         None
                     }
                 }
@@ -756,17 +752,17 @@ async fn load_plots(
                                 plots.insert(k, Arc::new(v));
                             }
                             Err(e) => {
-                                error!("Failed to read plot: {:?}", e);
+                                error!("Failed to read plot: {e:?}");
                             }
                         }
                     }
                 }
             }
             Ok(Err(e)) => {
-                error!("Failed to Join plot reader thread: {:?}", e);
+                error!("Failed to Join plot reader thread: {e:?}");
             }
             Err(e) => {
-                error!("Timeout in plot reader thread: {:?}", e);
+                error!("Timeout in plot reader thread: {e:?}");
             }
         }
     }
@@ -783,8 +779,7 @@ async fn load_plots(
         }
     }
     info!(
-        "Loaded {} og plots, {} pooling plots and {} compressed plots, failed to load {}, missing keys for {}",
-        og_count, pool_count, compressed_count, failed_count, missing_keys_count
+        "Loaded {og_count} og plots, {pool_count} pooling plots and {compressed_count} compressed plots, failed to load {failed_count}, missing keys for {missing_keys_count}"
     );
     Ok(plots)
 }

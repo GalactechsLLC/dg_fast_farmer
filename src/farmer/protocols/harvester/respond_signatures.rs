@@ -184,7 +184,7 @@ where
                                             .map_err(|e| {
                                                 Error::new(
                                                     ErrorKind::InvalidInput,
-                                                    format!("{:?}", e),
+                                                    format!("{e:?}"),
                                                 )
                                             })?;
                                     if agg_sig_cc_sp.to_signature().verify(
@@ -220,7 +220,7 @@ where
                                             .map_err(|e| {
                                                 Error::new(
                                                     ErrorKind::InvalidInput,
-                                                    format!("{:?}", e),
+                                                    format!("{e:?}"),
                                                 )
                                             })?;
                                     if agg_sig_rc_sp.to_signature().verify(
@@ -254,7 +254,7 @@ where
                                                 )?,
                                             };
                                             let pool_target_signature =
-                                                sign(sk, &pool_target.to_bytes(PROTOCOL_VERSION));
+                                                sign(sk, &pool_target.to_bytes(PROTOCOL_VERSION)?);
                                             (Some(pool_target), Some(pool_target_signature))
                                         } else {
                                             error!(
@@ -309,12 +309,12 @@ where
                                                     PROTOCOL_VERSION,
                                                     &request,
                                                     None,
-                                                )
-                                                .to_bytes(PROTOCOL_VERSION)
+                                                )?
+                                                .to_bytes(PROTOCOL_VERSION)?
                                                 .into(),
                                             ))
                                             .await?;
-                                        debug!("Declaring Proof of Space: {:?}", request);
+                                        debug!("Declaring Proof of Space: {request:?}");
                                         let top = format!("{:🌱<1$}", "", 43);
                                         let mid = format!(
                                             "{:🌱^1$}",
@@ -334,8 +334,7 @@ where
                                         }
                                     } else {
                                         error!(
-                                            "Failed to declare Proof of Space: {:?} No Client",
-                                            request
+                                            "Failed to declare Proof of Space: {request:?} No Client"
                                         );
                                     }
                                 }
@@ -396,7 +395,7 @@ where
                                     let foliage_agg_sig =
                                         AggregateSignature::aggregate(&foliage_sigs_to_agg, true)
                                             .map_err(|e| {
-                                            Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
+                                            Error::new(ErrorKind::InvalidInput, format!("{e:?}"))
                                         })?;
 
                                     let foliage_block_sigs_to_agg =
@@ -419,7 +418,7 @@ where
                                         true,
                                     )
                                     .map_err(|e| {
-                                        Error::new(ErrorKind::InvalidInput, format!("{:?}", e))
+                                        Error::new(ErrorKind::InvalidInput, format!("{e:?}"))
                                     })?;
                                     if foliage_agg_sig.to_signature().verify(
                                         true,
@@ -474,26 +473,25 @@ where
                                                     PROTOCOL_VERSION,
                                                     &request,
                                                     None,
-                                                )
-                                                .to_bytes(PROTOCOL_VERSION)
+                                                )?
+                                                .to_bytes(PROTOCOL_VERSION)?
                                                 .into(),
                                             ))
                                             .await;
-                                        debug!("Sending Signed Values: {:?}", request);
+                                        debug!("Sending Signed Values: {request:?}");
                                     } else {
                                         error!(
-                                            "Failed to Sending Signed Values: {:?} No Client",
-                                            request
+                                            "Failed to Sending Signed Values: {request:?} No Client"
                                         );
                                     }
                                 }
                             }
                         } else {
-                            warn!("No Signatures Received for {:?}", pospace);
+                            warn!("No Signatures Received for {pospace:?}");
                             return Ok(());
                         }
                     } else {
-                        warn!("Have invalid PoSpace {:?}", pospace);
+                        warn!("Have invalid PoSpace {pospace:?}");
                         return Ok(());
                     }
                 } else {

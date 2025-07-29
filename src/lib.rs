@@ -330,7 +330,7 @@ pub fn get_uuid() -> Result<Uuid, Error> {
         Uuid::parse_str(fs::read_to_string(uuid_path)?.as_str())
             .map_err(|e| Error::new(ErrorKind::InvalidInput, e))
     } else {
-        info!("Creating UUID: {:?}", uuid_path);
+        info!("Creating UUID: {uuid_path:?}");
         if let Some(p) = &uuid_path.parent() {
             fs::create_dir_all(p)?;
         }
