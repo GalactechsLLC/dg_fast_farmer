@@ -800,20 +800,20 @@ async fn load_headers(
             ));
         }
     };
-    if let Some(key) = &memo.pool_public_key {
-        if !pool_public_keys.contains(key) {
-            return Err(Error::new(
-                ErrorKind::NotFound,
-                "Missing Pool key in provided keys",
-            ));
-        }
-    } else if let Some(pool_contract_hash) = &memo.pool_contract_puzzle_hash {
-        if !pool_contract_hashes.contains(pool_contract_hash) {
-            return Err(Error::new(
-                ErrorKind::NotFound,
-                "Missing pool contract address in provided puzzle_hashes",
-            ));
-        }
+    if let Some(key) = &memo.pool_public_key
+        && !pool_public_keys.contains(key)
+    {
+        return Err(Error::new(
+            ErrorKind::NotFound,
+            "Missing Pool key in provided keys",
+        ));
+    } else if let Some(pool_contract_hash) = &memo.pool_contract_puzzle_hash
+        && !pool_contract_hashes.contains(pool_contract_hash)
+    {
+        return Err(Error::new(
+            ErrorKind::NotFound,
+            "Missing pool contract address in provided puzzle_hashes",
+        ));
     }
     if !farmer_public_keys.contains(&memo.farmer_public_key) {
         return Err(Error::new(

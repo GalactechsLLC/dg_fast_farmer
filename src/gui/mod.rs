@@ -222,25 +222,25 @@ async fn run_gui<B: Backend, T>(
             let fullnode_state = gui_state.farmer_state.fullnode_state.read().await.clone();
             terminal.draw(|f| ui(f, farmer_state, fullnode_state, most_recent_sp, &sys_info))?;
         }
-        if event::poll(Duration::from_millis(25))? {
-            if let Event::Key(event) = event::read()? {
-                match event.code {
-                    KeyCode::Esc => {
+        if event::poll(Duration::from_millis(25))?
+            && let Event::Key(event) = event::read()?
+        {
+            match event.code {
+                KeyCode::Esc => {
+                    gui_state
+                        .farmer_state
+                        .signal
+                        .store(false, Ordering::Relaxed);
+                }
+                KeyCode::Char('c') => {
+                    if event.modifiers == KeyModifiers::CONTROL {
                         gui_state
                             .farmer_state
                             .signal
                             .store(false, Ordering::Relaxed);
                     }
-                    KeyCode::Char('c') => {
-                        if event.modifiers == KeyModifiers::CONTROL {
-                            gui_state
-                                .farmer_state
-                                .signal
-                                .store(false, Ordering::Relaxed);
-                        }
-                    }
-                    _ => {}
                 }
+                _ => {}
             }
         }
         if !gui_state.farmer_state.signal.load(Ordering::Relaxed) {
@@ -409,7 +409,7 @@ fn draw_logs<'a>() -> TuiLoggerWidget<'a> {
         .style(Style::default().fg(Color::White).bg(Color::Black))
 }
 
-fn draw_gauge(title: &str, value: u16) -> Gauge {
+fn draw_gauge(title: &str, value: u16) -> Gauge<'_> {
     let gauge = Gauge::default()
         .block(Block::default().title(title).borders(Borders::ALL))
         .percent(value);

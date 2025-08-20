@@ -707,10 +707,10 @@ pub async fn update_pool_state<'a, T, C: Clone, P: 'a + PoolClient + Sized + Syn
                                 .await
                                 {
                                     Ok(res) => {
-                                        if payout_instructions_update_required {
-                                            if let Some(false) = res.payout_instructions {
-                                                error!("Pool Rejected Updating Payout Address")
-                                            }
+                                        if payout_instructions_update_required
+                                            && let Some(false) = res.payout_instructions
+                                        {
+                                            error!("Pool Rejected Updating Payout Address")
                                         }
                                         if difficulty_update_required {
                                             if let Some(true) = res.suggested_difficulty {

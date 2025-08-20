@@ -35,7 +35,7 @@ use tokio::fs::create_dir_all;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: ChiaProtocolVersion = ChiaProtocolVersion::Chia0_0_36;
+const PROTOCOL_VERSION: ChiaProtocolVersion = ChiaProtocolVersion::Chia0_0_37;
 
 fn _version() -> &'static str {
     env!("CARGO_PKG_VERSION")

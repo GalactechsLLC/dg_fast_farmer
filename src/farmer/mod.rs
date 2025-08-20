@@ -187,15 +187,15 @@ where
             }
             let mut last_clear = Instant::now();
             loop {
-                if let Some(client) = s.full_node_client.read().await.as_ref() {
-                    if client.is_closed() {
-                        if !s.shared_state.signal.load(Ordering::Relaxed) {
-                            info!("Farmer Stopped");
-                            break 'retry;
-                        } else {
-                            info!("Unexpected Farmer Client Closed, Reconnecting");
-                            break;
-                        }
+                if let Some(client) = s.full_node_client.read().await.as_ref()
+                    && client.is_closed()
+                {
+                    if !s.shared_state.signal.load(Ordering::Relaxed) {
+                        info!("Farmer Stopped");
+                        break 'retry;
+                    } else {
+                        info!("Unexpected Farmer Client Closed, Reconnecting");
+                        break;
                     }
                 }
                 let dur = Instant::now()

@@ -172,19 +172,20 @@ pub async fn generate_config_from_mnemonic<C: Clone + Serialize>(
     gen_settings: GenerateConfig,
     use_prompts: bool,
 ) -> Result<Config<C>, Error> {
-    if let Some(op) = &gen_settings.output_path {
-        if use_prompts && op.exists() {
-            let user_confirm = !Confirm::new()
-                .with_prompt(format!(
-                    "An existing config exists at {op:?}, would you like to override it? (Y/N)"
-                ))
-                .interact()
-                .map_err(|e| {
-                    Error::new(ErrorKind::Interrupted, format!("Dialog Interrupted: {e:?}"))
-                })?;
-            if !user_confirm {
-                return Err(Error::new(ErrorKind::Interrupted, "User Canceled"));
-            }
+    if let Some(op) = &gen_settings.output_path
+        && use_prompts
+        && op.exists()
+    {
+        let user_confirm = !Confirm::new()
+            .with_prompt(format!(
+                "An existing config exists at {op:?}, would you like to override it? (Y/N)"
+            ))
+            .interact()
+            .map_err(|e| {
+                Error::new(ErrorKind::Interrupted, format!("Dialog Interrupted: {e:?}"))
+            })?;
+        if !user_confirm {
+            return Err(Error::new(ErrorKind::Interrupted, "User Canceled"));
         }
     }
     let mut config = Config::default();
